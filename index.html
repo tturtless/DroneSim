@@ -1477,6 +1477,125 @@
       if (b.gx === PARK_BLOCK.gx && b.gz === PARK_BLOCK.gz) buildPark(b.x, b.z);
     });
 
+    // ---- FPV drone gate course: race gates, arches, ladder-kits and
+    // slalom flags dropped down the street corridors and across the plaza,
+    // in the same blue/white kit as a real backyard agility/FPV set.
+    // Every element is a real collidable obstacle via addBox/addCylinder,
+    // just like the rest of the city. ----
+    const gateBlueMat  = new THREE.MeshStandardMaterial({ color: 0x1f5fd6, roughness: 0.35, metalness: 0.25 });
+    const gateWhiteMat = new THREE.MeshStandardMaterial({ color: 0xf2f2ec, roughness: 0.4, metalness: 0.1 });
+
+    // square race gate built from pre-rotated local offsets so posts land correctly
+    function gate(x, z, rotY, mat, size){
+      size = size || 3.2;
+      const postH = size, thick = 0.12;
+      const dx = Math.cos(rotY), dz = -Math.sin(rotY);
+      const lx = x - dx*size/2, lz = z - dz*size/2;
+      const rx = x + dx*size/2, rz = z + dz*size/2;
+      const l = addBox(lx, postH/2, lz, thick, postH, thick, mat); l.rotation.y = rotY;
+      const r = addBox(rx, postH/2, rz, thick, postH, thick, mat); r.rotation.y = rotY;
+      const t = addBox(x, postH, z, size + thick*2, thick, thick, mat); t.rotation.y = rotY;
+    }
+    // hexagon gate: six posts + rails forming a hex ring, open center
+    function hexGate(x, z, radius, mat){
+      radius = radius || 1.6;
+      const sides = 6, thick = 0.1, postH = radius * 1.9;
+      for (let i = 0; i < sides; i++){
+        const a0 = (i / sides) * Math.PI * 2;
+        const a1 = ((i + 1) / sides) * Math.PI * 2;
+        const p0 = { x: x + Math.cos(a0) * radius, z: z + Math.sin(a0) * radius };
+        const p1 = { x: x + Math.cos(a1) * radius, z: z + Math.sin(a1) * radius };
+        const mx = (p0.x + p1.x) / 2, mz = (p0.z + p1.z) / 2;
+        const len = Math.hypot(p1.x - p0.x, p1.z - p0.z);
+        const ang = Math.atan2(p1.x - p0.x, p1.z - p0.z);
+        const rail = addBox(mx, postH, mz, len, thick, thick, mat);
+        rail.rotation.y = ang;
+        addCylinder(p0.x, postH/2, p0.z, 0.06, postH, mat, 8);
+      }
+    }
+    // ladder gate: a tall vertical ladder-frame with multiple rungs to
+    // thread precisely — a classic FPV precision-gap obstacle
+    function ladderGate(x, z, rotY, mat, width, height, rungs){
+      width = width || 2.0; height = height || 3.6; rungs = rungs || 4;
+      const thick = 0.1;
+      const dx = Math.cos(rotY), dz = -Math.sin(rotY);
+      const lx = x - dx*width/2, lz = z - dz*width/2;
+      const rx = x + dx*width/2, rz = z + dz*width/2;
+      const l = addBox(lx, height/2, lz, thick, height, thick, mat); l.rotation.y = rotY;
+      const r = addBox(rx, height/2, rz, thick, height, thick, mat); r.rotation.y = rotY;
+      for (let i = 0; i < rungs; i++){
+        const ry = (height / (rungs - 1)) * i || 0.15;
+        const rung = addBox(x, ry, z, width + thick, thick, thick, mat);
+        rung.rotation.y = rotY;
+      }
+    }
+    // slalom pylon: a single tall thin pole with a bright flag near the top
+    function slalomFlag(x, z, mat, flagMat){
+      addCylinder(x, 1.1, z, 0.05, 2.2, mat, 8);
+      addBox(x + 0.28, 2.0, z, 0.5, 0.35, 0.02, flagMat || mat);
+    }
+    // low single-bar jump (like the white agility jump in the reference kit)
+    function lowJumpBar(x, z, rotY, mat, width){
+      width = width || 2.6;
+      const postH = 0.9, thick = 0.1;
+      const dx = Math.cos(rotY), dz = -Math.sin(rotY);
+      const lx = x - dx*width/2, lz = z - dz*width/2;
+      const rx = x + dx*width/2, rz = z + dz*width/2;
+      const l = addBox(lx, postH/2, lz, thick, postH, thick, mat); l.rotation.y = rotY;
+      const r = addBox(rx, postH/2, rz, thick, postH, thick, mat); r.rotation.y = rotY;
+      const bar = addBox(x, postH, z, width + thick, thick, thick, mat); bar.rotation.y = rotY;
+    }
+
+    function buildDroneCourse(){
+      // Down the two N-S streets: a straight run of alternating square
+      // gates, hex gates, and a ladder threading section — banked low so
+      // pilots race between the buildings, under the wires.
+      streetCoords.forEach((sx, si) => {
+        const gateSpacing = 26;
+        const count = Math.floor((spanReach * 2) / gateSpacing);
+        for (let i = 0; i < count; i++){
+          const gz = -spanReach + i * gateSpacing + gateSpacing/2;
+          const kind = i % 4;
+          if (kind === 0) gate(sx, gz, 0, gateBlueMat, 3.4);
+          else if (kind === 1) hexGate(sx + (si === 0 ? 4 : -4), gz, 1.7, gateWhiteMat);
+          else if (kind === 2) gate(sx, gz, 0, gateWhiteMat, 2.8);
+          else ladderGate(sx + (si === 0 ? -4 : 4), gz, 0, gateBlueMat, 2.0, 3.4, 4);
+        }
+      });
+      // Down the two E-W streets: mirrored, rotated 90°
+      streetCoords.forEach((sz, si) => {
+        const gateSpacing = 26;
+        const count = Math.floor((spanReach * 2) / gateSpacing);
+        for (let i = 0; i < count; i++){
+          const gx = -spanReach + i * gateSpacing + gateSpacing/2;
+          const kind = (i + 2) % 4;
+          if (kind === 0) gate(gx, sz, Math.PI/2, gateWhiteMat, 3.4);
+          else if (kind === 1) hexGate(gx, sz + (si === 0 ? 4 : -4), 1.7, gateBlueMat);
+          else if (kind === 2) gate(gx, sz, Math.PI/2, gateBlueMat, 2.8);
+          else ladderGate(gx, sz + (si === 0 ? -4 : 4), Math.PI/2, gateWhiteMat, 2.0, 3.4, 4);
+        }
+      });
+      // A cluster of hex gates for freestyle gate-whipping in the plaza's
+      // open deck, a slalom flag row and a low jump bar near the park.
+      const plaza = blockCenters.find(b => b.gx === PLAZA_BLOCK.gx && b.gz === PLAZA_BLOCK.gz);
+      if (plaza){
+        const inner = BLOCK/2 - SIDEWALK_W - 2;
+        [[-0.15, -0.3, 1.4], [0.05, -0.15, 1.55], [0.22, 0.02, 1.35], [0.1, 0.22, 1.5]].forEach(([fx, fz, r]) => {
+          hexGate(plaza.x + fx*inner, plaza.z + fz*inner, r, gateBlueMat);
+        });
+      }
+      const park = blockCenters.find(b => b.gx === PARK_BLOCK.gx && b.gz === PARK_BLOCK.gz);
+      if (park){
+        const inner = BLOCK/2 - SIDEWALK_W - 2;
+        const flagRow = [[-0.75, 0.0], [-0.6, -0.08], [-0.45, 0.0], [-0.3, -0.08], [-0.15, 0.0]];
+        flagRow.forEach(([fx, fz]) => {
+          slalomFlag(park.x + fx*inner, park.z + fz*inner, gateWhiteMat, gateBlueMat);
+        });
+        lowJumpBar(park.x - inner*0.9, park.z + inner*0.5, Math.PI/2, gateWhiteMat, 2.6);
+      }
+    }
+    buildDroneCourse();
+
     // ---- Bike lanes: a painted green lane along both curbsides of every
     // street, between the parking/drive lane and the curb, giving cyclists
     // (and the city a happier bike-friendliness score) their own strip. ----
