@@ -1325,12 +1325,8 @@
         }
       }
     }
-    const streetEdgeOffset = STREET_W/2 + SIDEWALK_W + 0.6;
-    streetCoords.forEach(c => {
-      lineOfLights(true, c - streetEdgeOffset + STREET_W, -spanReach, spanReach, 14, 1);
-      lineOfLights(true, c + streetEdgeOffset - STREET_W, -spanReach, spanReach, 14, -1);
-    });
-    // simpler: place lights directly along each street's two curbsides
+    // place lights directly along each street's two curbsides (just past
+    // the sidewalk, on the block edge — clear of the roadway itself)
     streetCoords.forEach(c => {
       lineOfLights(true, c - (STREET_W/2 + SIDEWALK_W + 0.6), -spanReach, spanReach, 14, 1);
       lineOfLights(true, c + (STREET_W/2 + SIDEWALK_W + 0.6), -spanReach, spanReach, 14, -1);
@@ -2493,15 +2489,15 @@
     // acro mode: sticks command a rotation RATE (deg/s equivalent), not a
     // clamped attitude angle, so full flips/rolls/loops are possible and the
     // craft holds whatever attitude you leave it at when sticks are centered.
-    const YAW_RATE = 4.2;   // rad/s at full deflection
-    const PITCH_RATE = 5.8; // rad/s at full deflection
-    const ROLL_RATE = 6.2;  // rad/s at full deflection
+    const YAW_RATE = 3.4;   // rad/s at full deflection
+    const PITCH_RATE = 4.4; // rad/s at full deflection
+    const ROLL_RATE = 4.7;  // rad/s at full deflection
 
     // Motor KV comes from whichever craft was selected at launch. KV chiefly
     // drives motor RPM/thrust headroom, so it scales max acceleration
     // (top end speed & punch) below.
     const MOTOR_KV = selectedDrone.kv;
-    const KV_REF = 2700; // reference KV the base 52 m/s^2 figure was tuned at
+    const KV_REF = 2700; // reference KV the base acceleration figure was tuned at
     const KV_SCALE = MOTOR_KV / KV_REF;
 
     if (!landed){
@@ -2529,7 +2525,7 @@
       // thrust acts along the drone's body "up" axis (like a real multirotor),
       // found by rotating world-up through the current attitude quaternion —
       // this stays correct at any orientation, including upside down.
-      const thrust = t * 52 * KV_SCALE; // max accel — 30000KV motors
+      const thrust = t * 34 * KV_SCALE; // max accel — reduced for a heavier, less twitchy feel
       const bodyUp = new THREE.Vector3(0, 1, 0).applyQuaternion(orientation);
 
       vel.x += bodyUp.x * thrust * dt;
@@ -2538,8 +2534,9 @@
 
       // drag — separate, stronger drag on downward (falling) speed so descents
       // feel weighty and controlled rather than floaty; horizontal/climb drag
-      // stays low for that high-KV top-speed feel.
-      const horizDrag = 1 - Math.min(1, 0.7*dt);
+      // is higher than before so the craft settles and holds a speed rather
+      // than coasting/skating, reinforcing a heavier feel.
+      const horizDrag = 1 - Math.min(1, 1.1*dt);
       vel.x *= horizDrag;
       vel.z *= horizDrag;
       if (vel.y < 0){
