@@ -801,11 +801,13 @@
 
     // ===================================================================
     // DOWNTOWN CITY LAYOUT
-    // A 2x2 grid of commercial city blocks separated by wide paved streets,
-    // with sidewalks, road markings, multi-story office towers, streetlights,
-    // traffic lights at every intersection, and power lines strung between
-    // poles. Built entirely from boxes/cylinders so it uses the same
-    // addBox/addCylinder + obstacles collision system as the rest of the sim.
+    // A 3x3 grid of commercial city blocks separated by wide paved streets,
+    // with sidewalks, road markings, varied multi-story buildings,
+    // streetlights, traffic lights at every intersection, power lines, and
+    // street-level clutter (trees, trash cans, dumpsters, ladders,
+    // antennas, water tanks, billboards, bike racks) to fly around. Built
+    // entirely from boxes/cylinders so it uses the same addBox/addCylinder
+    // + obstacles collision system as the rest of the sim.
     // ===================================================================
 
     function addBox(x, y, z, w, h, d, mat){
@@ -826,23 +828,37 @@
       return mesh;
     }
 
+    // seeded pseudo-random so the layout is varied but reproducible
+    let citySeed = 1337;
+    function cityRand(){
+      citySeed = (citySeed * 1103515245 + 12345) & 0x7fffffff;
+      return (citySeed % 10000) / 10000;
+    }
+    function cityRange(min, max){ return min + cityRand() * (max - min); }
+    function cityPick(arr){ return arr[Math.floor(cityRand() * arr.length)]; }
+
     // ---- city geometry constants ----
-    // Two streets run east-west, two run north-south, forming a 2x2 grid
-    // of blocks. Streets are wide (dual lane + median + parking-width
-    // shoulder) so there is plenty of clear corridor for smooth flight.
+    // Streets run east-west and north-south forming a 3x3 grid of blocks
+    // (9 blocks total). Streets are wide (dual lane + shoulder) so there is
+    // plenty of clear corridor for smooth flight.
     const BLOCK = 70;          // block footprint (square), interior buildable area
     const STREET_W = 22;       // full paved street width (curb to curb)
     const SIDEWALK_W = 3.2;    // sidewalk width on each side of the street
-    const LANE_W = STREET_W / 2;
-    const CITY_SPAN = BLOCK * 2 + STREET_W; // total width/depth of the whole grid
+    const GRID_N = 3;          // 3x3 blocks
+    const STEP = BLOCK + STREET_W; // center-to-center spacing between blocks
+    const CITY_SPAN = GRID_N * BLOCK + (GRID_N - 1) * STREET_W; // total width/depth
     const CITY_OFFSET = CITY_SPAN / 2;      // so the grid is centered at origin
-    // Block centers (2x2 grid), each block is BLOCK x BLOCK
-    const blockCenters = [
-      { x: -(BLOCK/2 + STREET_W/2), z: -(BLOCK/2 + STREET_W/2) },
-      { x:  (BLOCK/2 + STREET_W/2), z: -(BLOCK/2 + STREET_W/2) },
-      { x: -(BLOCK/2 + STREET_W/2), z:  (BLOCK/2 + STREET_W/2) },
-      { x:  (BLOCK/2 + STREET_W/2), z:  (BLOCK/2 + STREET_W/2) },
-    ];
+    // Block centers (3x3 grid), each block is BLOCK x BLOCK. Index runs
+    // row-major: gx (column, east+), gz (row, south+) both in [-1,0,1].
+    const blockCenters = [];
+    for (let gz = -1; gz <= 1; gz++){
+      for (let gx = -1; gx <= 1; gx++){
+        blockCenters.push({ x: gx * STEP, z: gz * STEP, gx, gz });
+      }
+    }
+    // street centerlines (the gaps between block columns/rows)
+    const streetCoords = [-STEP/2, STEP/2]; // two N-S streets, two E-W streets
+    const spanReach = CITY_OFFSET + 18; // how far streets extend past the city edge
 
     // ---- materials ----
     const asphaltMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2e, roughness: 0.95 });
@@ -862,54 +878,96 @@
       0x8a95a1, 0x6f7d8c, 0x9aa5ad, 0x5f6b78, 0x7d8790,
       0xa3aeb8, 0x67707a, 0x8f9aa4, 0x556270, 0x93a0ab,
     ];
+    const brickPalette = [0x9c5b45, 0xa5654c, 0x8a4d3a, 0xb06f4f];
     const buildingMats = buildingPalette.map(c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.75, metalness: 0.1 }));
+    const brickMats = brickPalette.map(c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.95 }));
+    const darkTrimMats = buildingPalette.map((c,i) => new THREE.MeshStandardMaterial({ color: 0x333333 + i*0x010101, roughness: 0.7 }));
     const glassMat = new THREE.MeshStandardMaterial({ color: 0x3f5a6b, roughness: 0.3, metalness: 0.4, emissive: 0x0a141a });
+    const darkGlassMat = new THREE.MeshStandardMaterial({ color: 0x1c2b33, roughness: 0.25, metalness: 0.5, emissive: 0x05090c });
     const rooftopMat = new THREE.MeshStandardMaterial({ color: 0x2e2e2e, roughness: 0.9 });
     const rooftopUnitMat = new THREE.MeshStandardMaterial({ color: 0xc9c9c9, roughness: 0.6 });
 
+    // ---- street furniture materials ----
+    const treeTrunkMat = new THREE.MeshStandardMaterial({ color: 0x5a3d24, roughness: 0.9 });
+    const treeLeafMat = new THREE.MeshStandardMaterial({ color: 0x3f7d3f, roughness: 0.85 });
+    const treeLeafMat2 = new THREE.MeshStandardMaterial({ color: 0x4d8f4d, roughness: 0.85 });
+    const trashCanMat = new THREE.MeshStandardMaterial({ color: 0x2f5233, metalness: 0.3, roughness: 0.6 });
+    const trashLidMat = new THREE.MeshStandardMaterial({ color: 0x23401f, metalness: 0.3, roughness: 0.6 });
+    const dumpsterMat = new THREE.MeshStandardMaterial({ color: 0x3a5f3a, metalness: 0.2, roughness: 0.8 });
+    const dumpsterLidMat = new THREE.MeshStandardMaterial({ color: 0x2c4a2c, metalness: 0.2, roughness: 0.8 });
+    const ladderMat = new THREE.MeshStandardMaterial({ color: 0xb5b5ad, metalness: 0.6, roughness: 0.4 });
+    const antennaMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.7, roughness: 0.3 });
+    const waterTankMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.8 });
+    const waterTankRoofMat = new THREE.MeshStandardMaterial({ color: 0x4a3320, roughness: 0.8 });
+    const billboardFrameMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.6 });
+    const billboardFaceMats = [
+      new THREE.MeshStandardMaterial({ color: 0xdd4444, emissive: 0x330000 }),
+      new THREE.MeshStandardMaterial({ color: 0x4488dd, emissive: 0x001133 }),
+      new THREE.MeshStandardMaterial({ color: 0xdddd44, emissive: 0x333300 }),
+      new THREE.MeshStandardMaterial({ color: 0x44dd88, emissive: 0x003311 }),
+    ];
+    const bikeRackMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.6, roughness: 0.4 });
+    const hydrantMat = new THREE.MeshStandardMaterial({ color: 0xcc3333, roughness: 0.5 });
+    const benchMat = new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 0.8 });
+    const benchLegMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, metalness: 0.5, roughness: 0.5 });
+    const planterMat = new THREE.MeshStandardMaterial({ color: 0x8a7a68, roughness: 0.9 });
+    const awningMats = [
+      new THREE.MeshStandardMaterial({ color: 0xaa3333, roughness: 0.7 }),
+      new THREE.MeshStandardMaterial({ color: 0x336699, roughness: 0.7 }),
+      new THREE.MeshStandardMaterial({ color: 0x338855, roughness: 0.7 }),
+      new THREE.MeshStandardMaterial({ color: 0xcc8822, roughness: 0.7 }),
+    ];
+    const vanMat = new THREE.MeshStandardMaterial({ color: 0xd8d8d0, roughness: 0.5, metalness: 0.3 });
+    const vanGlassMat = new THREE.MeshStandardMaterial({ color: 0x2a3a44, roughness: 0.2, metalness: 0.5 });
+
     // ---- streets: paved asphalt crossing the whole city, both axes ----
-    function buildStreetAxis(isVertical){
-      // A single continuous street slab running the full city span, at the
-      // gap between the two blocks along one axis.
+    function buildStreetAxis(coord, isVertical){
       const len = CITY_SPAN + 40; // extend past the city edge for approach/departure
       const thickness = 0.12;
       if (isVertical){
-        addBox(0, thickness/2, 0, STREET_W, thickness, len, asphaltMat);
+        addBox(coord, thickness/2, 0, STREET_W, thickness, len, asphaltMat);
       } else {
-        addBox(0, thickness/2, 0, len, thickness, STREET_W, asphaltMat);
+        addBox(0, thickness/2, coord, len, thickness, STREET_W, asphaltMat);
       }
     }
-    buildStreetAxis(true);
-    buildStreetAxis(false);
+    streetCoords.forEach(c => buildStreetAxis(c, true));
+    streetCoords.forEach(c => buildStreetAxis(c, false));
 
     // ---- lane markings: dashed center lines + solid edge lines on each
-    // street axis, plus stop lines and crosswalks at the four-way
-    // intersection in the middle ----
+    // street axis, plus stop lines and crosswalks at every intersection ----
     function buildDashedLine(cx, cz, length, isVertical, mat){
       const dashLen = 2.2, gapLen = 2.2, w = 0.22;
       const count = Math.floor(length / (dashLen + gapLen));
       const start = -length/2;
       for (let i = 0; i < count; i++){
         const pos = start + i * (dashLen + gapLen) + dashLen/2;
-        if (Math.abs(pos) < STREET_W) continue; // skip through the intersection box
+        // skip through any intersection box along this run
+        let skip = false;
+        for (const oc of streetCoords){
+          const along = isVertical ? cz + pos : cx + pos;
+          if (Math.abs(along - oc) < STREET_W/2 + 1) { skip = true; break; }
+        }
+        if (skip) continue;
         if (isVertical) addBox(cx, 0.13, cz + pos, w, 0.02, dashLen, mat);
         else addBox(cx + pos, 0.13, cz, dashLen, 0.02, w, mat);
       }
     }
-    // center dashed yellow line down the middle of each street corridor
-    buildDashedLine(0, 0, CITY_SPAN + 40, true, laneLineMat);
-    buildDashedLine(0, 0, CITY_SPAN + 40, false, laneLineMat);
+    const fullLen = CITY_SPAN + 40;
+    streetCoords.forEach(c => {
+      buildDashedLine(c, 0, fullLen, true, laneLineMat);
+      buildDashedLine(0, c, fullLen, false, laneLineMat);
+    });
     // solid white edge lines marking the curb side of each lane
-    function buildSolidEdgeLines(){
+    function buildSolidEdgeLines(fixedCoord, isVertical){
       const half = STREET_W/2;
-      const len = CITY_SPAN + 40;
+      const len = fullLen;
       [half - 0.4, -half + 0.4].forEach(off => {
-        addBox(off, 0.13, 0, 0.18, 0.02, len, crosswalkMat);
-        addBox(0, 0.13, off, len, 0.02, 0.18, crosswalkMat);
+        if (isVertical) addBox(fixedCoord + off, 0.13, 0, 0.18, 0.02, len, crosswalkMat);
+        else addBox(0, 0.13, fixedCoord + off, len, 0.02, 0.18, crosswalkMat);
       });
     }
-    buildSolidEdgeLines();
-    // stop lines + crosswalk zebra stripes at the central 4-way intersection
+    streetCoords.forEach(c => { buildSolidEdgeLines(c, true); buildSolidEdgeLines(c, false); });
+    // crosswalk zebra stripes + stop lines at every intersection
     function buildCrosswalk(cx, cz, isVertical){
       const stripeW = 1.1, stripeGap = 0.9, count = 8, stripeLen = STREET_W - SIDEWALK_W*0.4;
       for (let i = 0; i < count; i++){
@@ -919,25 +977,29 @@
       }
     }
     const half = STREET_W/2;
-    buildCrosswalk(0, -half - 1.2, true);
-    buildCrosswalk(0, half + 1.2, true);
-    buildCrosswalk(-half - 1.2, 0, false);
-    buildCrosswalk(half + 1.2, 0, false);
-    // stop lines just before the intersection on all four approaches
-    [[0, -half-3.2, STREET_W-1, 0.5],[0, half+3.2, STREET_W-1, 0.5]].forEach(([x,z,w,d]) => addBox(x, 0.14, z, w, 0.02, d, crosswalkMat));
-    [[-half-3.2, 0, 0.5, STREET_W-1],[half+3.2, 0, 0.5, STREET_W-1]].forEach(([x,z,w,d]) => addBox(x, 0.14, z, w, 0.02, d, crosswalkMat));
+    streetCoords.forEach(sx => {
+      streetCoords.forEach(sz => {
+        buildCrosswalk(sx, sz - half - 1.2, true);
+        buildCrosswalk(sx, sz + half + 1.2, true);
+        buildCrosswalk(sx - half - 1.2, sz, false);
+        buildCrosswalk(sx + half + 1.2, sz, false);
+        // stop lines just before the intersection on all four approaches
+        addBox(sx, 0.14, sz - half - 3.2, STREET_W - 1, 0.02, 0.5, crosswalkMat);
+        addBox(sx, 0.14, sz + half + 3.2, STREET_W - 1, 0.02, 0.5, crosswalkMat);
+        addBox(sx - half - 3.2, 0.14, sz, 0.5, 0.02, STREET_W - 1, crosswalkMat);
+        addBox(sx + half + 3.2, 0.14, sz, 0.5, 0.02, STREET_W - 1, crosswalkMat);
+      });
+    });
 
     // ---- sidewalks + curbs framing every block ----
     function buildSidewalkRing(bx, bz){
       const outer = BLOCK/2 + SIDEWALK_W;
       const inner = BLOCK/2;
       const curbH = 0.15, sidewalkH = 0.1;
-      // four sidewalk slabs (N/S/E/W) around the block, mitered at corners
       addBox(bx, sidewalkH/2, bz - (inner+outer)/2, outer*2, sidewalkH, SIDEWALK_W, sidewalkMat); // north
       addBox(bx, sidewalkH/2, bz + (inner+outer)/2, outer*2, sidewalkH, SIDEWALK_W, sidewalkMat); // south
       addBox(bx - (inner+outer)/2, sidewalkH/2, bz, SIDEWALK_W, sidewalkH, outer*2, sidewalkMat); // west
       addBox(bx + (inner+outer)/2, sidewalkH/2, bz, SIDEWALK_W, sidewalkH, outer*2, sidewalkMat); // east
-      // low curb strip right at the street edge
       addBox(bx, curbH/2, bz - inner - 0.15, inner*2 + SIDEWALK_W*2, curbH, 0.3, curbMat);
       addBox(bx, curbH/2, bz + inner + 0.15, inner*2 + SIDEWALK_W*2, curbH, 0.3, curbMat);
       addBox(bx - inner - 0.15, curbH/2, bz, 0.3, curbH, inner*2 + SIDEWALK_W*2, curbMat);
@@ -945,42 +1007,280 @@
     }
     blockCenters.forEach(b => buildSidewalkRing(b.x, b.z));
 
-    // ---- multi-story office building ----
-    // Builds a boxy tower with a glass curtain-wall band, a slightly
-    // recessed lobby base, and a rooftop mechanical unit. Kept as clean
-    // stacked boxes for reliable collision.
+    // ---- rooftop details: ladders, antennas, water tanks, AC units ----
+    // Metal service ladder running up one face of a tower, rung by rung.
+    function buildLadder(cx, cz, wallFaceOffset, faceAxis, height){
+      // faceAxis: 'x' means ladder sits on the +/-X face (rails run along Z... )
+      const railGap = 0.4, rungSpacing = 0.5;
+      const rungCount = Math.floor(height / rungSpacing);
+      const x1 = faceAxis === 'x' ? cx + wallFaceOffset : cx - railGap/2;
+      const x2 = faceAxis === 'x' ? cx + wallFaceOffset : cx + railGap/2;
+      const z1 = faceAxis === 'z' ? cz + wallFaceOffset : cz - railGap/2;
+      const z2 = faceAxis === 'z' ? cz + wallFaceOffset : cz + railGap/2;
+      // two vertical rails
+      addBox(x1, height/2, z1, faceAxis==='x'?0.06:0.06, height, faceAxis==='z'?0.06:0.06, ladderMat);
+      addBox(x2, height/2, z2, faceAxis==='x'?0.06:0.06, height, faceAxis==='z'?0.06:0.06, ladderMat);
+      // rungs
+      for (let i = 1; i < rungCount; i++){
+        const y = i * rungSpacing;
+        if (faceAxis === 'x') addBox(cx + wallFaceOffset, y, cz, 0.05, 0.05, railGap, ladderMat);
+        else addBox(cx, y, cz + wallFaceOffset, railGap, 0.05, 0.05, ladderMat);
+      }
+    }
+
+    function buildRoofAntenna(cx, cz, baseH){
+      addCylinder(cx, baseH + 1.8, cz, 0.06, 3.6, antennaMat, 6);
+      // small crossbar near the top for a TV/radio antenna look
+      addBox(cx, baseH + 3.0, cz, 0.9, 0.04, 0.04, antennaMat);
+      addBox(cx, baseH + 2.6, cz, 0.6, 0.04, 0.04, antennaMat);
+    }
+
+    function buildRoofWaterTank(cx, cz, baseH){
+      const r = 1.4, h = 2.2;
+      // stilts
+      const legOffsets = [[r*0.6,r*0.6],[-r*0.6,r*0.6],[r*0.6,-r*0.6],[-r*0.6,-r*0.6]];
+      legOffsets.forEach(([dx,dz]) => addCylinder(cx+dx, baseH + 0.9, cz+dz, 0.08, 1.8, poleMat, 6));
+      addCylinder(cx, baseH + 1.8 + h/2, cz, r, h, waterTankMat, 12);
+      addCylinder(cx, baseH + 1.8 + h + 0.35, cz, r*0.65, 0.7, waterTankRoofMat, 10);
+    }
+
+    function buildRoofACUnits(cx, cz, baseH, footprintW, footprintD){
+      const count = 2 + Math.floor(cityRand()*2);
+      for (let i = 0; i < count; i++){
+        const dx = cityRange(-footprintW*0.3, footprintW*0.3);
+        const dz = cityRange(-footprintD*0.3, footprintD*0.3);
+        addBox(cx+dx, baseH + 0.35, cz+dz, 0.9, 0.7, 0.9, rooftopUnitMat);
+      }
+    }
+
+    // ---- building archetypes ----
+    // Several distinct styles so the skyline (and street frontage) reads
+    // as a real mixed downtown rather than repeated identical towers.
     let matIdx = 0;
-    function buildOfficeTower(cx, cz, footprintW, footprintD, floors, floorH){
+
+    // Glass curtain-wall office tower (the original style, refined)
+    function buildGlassTower(cx, cz, w, d, floors, floorH){
       const mat = buildingMats[matIdx % buildingMats.length]; matIdx++;
       const height = floors * floorH;
-      // lobby base (slightly wider, darker)
       const baseH = floorH * 1.3;
-      addBox(cx, baseH/2, cz, footprintW + 1.2, baseH, footprintD + 1.2, buildingMats[(matIdx+3) % buildingMats.length]);
-      // main tower shaft
-      addBox(cx, baseH + height/2, cz, footprintW, height, footprintD, mat);
-      // glass banding: thin glass strips wrapped around the shaft at
-      // intervals to read as floor lines from a distance
+      addBox(cx, baseH/2, cz, w + 1.2, baseH, d + 1.2, darkTrimMats[matIdx % darkTrimMats.length]);
+      addBox(cx, baseH + height/2, cz, w, height, d, mat);
       const bands = Math.max(2, Math.floor(floors/3));
       for (let i = 1; i <= bands; i++){
         const y = baseH + (height * i)/(bands+1);
-        addBox(cx, y, cz, footprintW + 0.15, 0.35, footprintD + 0.15, glassMat);
+        addBox(cx, y, cz, w + 0.15, 0.35, d + 0.15, glassMat);
       }
-      // rooftop deck + mechanical unit + antenna
-      addBox(cx, baseH + height + 0.15, cz, footprintW, 0.3, footprintD, rooftopMat);
-      addBox(cx + footprintW*0.2, baseH + height + 0.9, cz - footprintD*0.15, footprintW*0.3, 1.4, footprintD*0.3, rooftopUnitMat);
-      addCylinder(cx - footprintW*0.25, baseH + height + 1.6, cz + footprintD*0.2, 0.12, 2.6, poleMat, 6);
-      return baseH + height;
+      addBox(cx, baseH + height + 0.15, cz, w, 0.3, d, rooftopMat);
+      const topH = baseH + height + 0.3;
+      buildRoofACUnits(cx, cz, topH, w, d);
+      if (cityRand() < 0.55) buildRoofAntenna(cx + w*0.22, cz - d*0.18, topH);
+      if (cityRand() < 0.3) buildRoofWaterTank(cx - w*0.22, cz + d*0.18, topH);
+      if (cityRand() < 0.6) buildLadder(cx, cz, -d/2 - 0.05, 'z', baseH + height);
+      return topH;
+    }
+
+    // Dark glass slab tower - tall, narrow, monolithic, reflective
+    function buildSlabTower(cx, cz, w, d, floors, floorH){
+      const height = floors * floorH;
+      const baseH = floorH;
+      addBox(cx, baseH/2, cz, w + 0.8, baseH, d + 0.8, darkTrimMats[matIdx % darkTrimMats.length]); matIdx++;
+      addBox(cx, baseH + height/2, cz, w, height, d, darkGlassMat);
+      // thin mullion bands every couple floors
+      const bands = Math.max(3, Math.floor(floors/2));
+      for (let i = 1; i <= bands; i++){
+        const y = baseH + (height * i)/(bands+1);
+        addBox(cx, y, cz, w + 0.08, 0.12, d + 0.08, poleMat);
+      }
+      addBox(cx, baseH + height + 0.1, cz, w, 0.2, d, rooftopMat);
+      const topH = baseH + height + 0.2;
+      buildRoofACUnits(cx, cz, topH, w, d);
+      buildRoofAntenna(cx, cz, topH);
+      if (cityRand() < 0.5) buildLadder(cx, cz, w/2 + 0.05, 'x', baseH + height);
+      return topH;
+    }
+
+    // Brick mid-rise with a flat roof, punched windows, and a street-level
+    // awning - reads as older/shorter commercial building for contrast
+    function buildBrickMidrise(cx, cz, w, d, floors, floorH){
+      const mat = brickMats[matIdx % brickMats.length]; matIdx++;
+      const height = floors * floorH;
+      addBox(cx, height/2, cz, w, height, d, mat);
+      // punched window bands (darker recessed strips per floor)
+      for (let f = 0; f < floors; f++){
+        const y = floorH * f + floorH*0.65;
+        addBox(cx, y, cz - d/2 - 0.03, w*0.8, floorH*0.42, 0.05, darkGlassMat);
+        addBox(cx, y, cz + d/2 + 0.03, w*0.8, floorH*0.42, 0.05, darkGlassMat);
+      }
+      // cornice trim at roofline
+      addBox(cx, height + 0.15, cz, w + 0.5, 0.3, d + 0.5, darkTrimMats[matIdx % darkTrimMats.length]);
+      // street-level storefront awning
+      const awningMat = cityPick(awningMats);
+      addBox(cx, 2.6, cz + d/2 + 0.5, w*0.7, 0.12, 1.0, awningMat);
+      const topH = height + 0.3;
+      if (cityRand() < 0.7) buildLadder(cx, cz, -d/2 - 0.05, 'z', height);
+      if (cityRand() < 0.4) buildRoofWaterTank(cx, cz, topH);
+      return topH;
+    }
+
+    // Stepped-setback tower - wide base tiers narrowing toward the top,
+    // classic older-skyscraper silhouette
+    function buildSteppedTower(cx, cz, w, d, floors, floorH){
+      const mat = buildingMats[(matIdx+2) % buildingMats.length]; matIdx++;
+      const tiers = 3;
+      let curW = w, curD = d, y = 0;
+      const tierFloors = Math.max(2, Math.floor(floors/tiers));
+      let topH = 0;
+      for (let t = 0; t < tiers; t++){
+        const tierH = tierFloors * floorH;
+        addBox(cx, y + tierH/2, cz, curW, tierH, curD, mat);
+        // window band per tier
+        addBox(cx, y + tierH*0.7, cz, curW + 0.1, tierH*0.2, curD + 0.1, glassMat);
+        y += tierH;
+        topH = y;
+        curW *= 0.72; curD *= 0.72;
+      }
+      addBox(cx, topH + 0.1, cz, curW, 0.2, curD, rooftopMat);
+      topH += 0.2;
+      buildRoofAntenna(cx, cz, topH);
+      if (cityRand() < 0.5) buildRoofACUnits(cx, cz, topH, curW, curD);
+      return topH;
+    }
+
+    // Low commercial box with a big rooftop billboard - fun visual landmark
+    function buildBillboardBuilding(cx, cz, w, d, floors, floorH){
+      const mat = buildingMats[(matIdx+1) % buildingMats.length]; matIdx++;
+      const height = Math.max(2, Math.floor(floors*0.5)) * floorH;
+      addBox(cx, height/2, cz, w, height, d, mat);
+      addBox(cx, height*0.6, cz - d/2 - 0.03, w*0.85, height*0.5, 0.05, glassMat);
+      const topH = height + 0.15;
+      addBox(cx, topH, cz, w*0.9, 0.3, d*0.9, rooftopMat);
+      // billboard structure on the roof
+      const bbW = w * 0.8, bbH = 3.2;
+      addBox(cx - bbW*0.3, topH + bbH/2 + 0.3, cz, 0.12, bbH, 0.12, billboardFrameMat);
+      addBox(cx + bbW*0.3, topH + bbH/2 + 0.3, cz, 0.12, bbH, 0.12, billboardFrameMat);
+      addBox(cx, topH + bbH + 0.3, cz, bbW, 0.15, 0.5, billboardFrameMat);
+      addBox(cx, topH + bbH*0.5 + 0.3, cz, bbW, bbH*0.8, 0.08, cityPick(billboardFaceMats));
+      if (cityRand() < 0.6) buildLadder(cx, cz, w/2 + 0.05, 'x', height);
+      return topH + bbH + 0.6;
+    }
+
+    const buildingStyles = [buildGlassTower, buildSlabTower, buildBrickMidrise, buildSteppedTower, buildBillboardBuilding];
+
+    // ---- street-level furniture: trees, trash cans, dumpsters, benches,
+    // planters, bike racks, hydrants, and a parked van/truck here and
+    // there along the sidewalks ----
+    function buildTree(x, z){
+      addCylinder(x, 0.9, z, 0.14, 1.8, treeTrunkMat, 6);
+      const leafMat = cityRand() < 0.5 ? treeLeafMat : treeLeafMat2;
+      addCylinder(x, 2.6, z, 1.1, 1.6, leafMat, 8);
+      addCylinder(x, 3.4, z, 0.75, 1.1, leafMat, 8);
+    }
+    function buildPlanterTree(x, z){
+      addBox(x, 0.35, z, 1.0, 0.7, 1.0, planterMat);
+      buildTree2(x, z, 0.7);
+    }
+    function buildTree2(x, z, baseY){
+      addCylinder(x, (baseY||0)+1.0, z, 0.12, 1.6, treeTrunkMat, 6);
+      const leafMat = cityRand() < 0.5 ? treeLeafMat : treeLeafMat2;
+      addCylinder(x, (baseY||0)+2.4, z, 0.95, 1.4, leafMat, 8);
+    }
+    function buildTrashCan(x, z){
+      addCylinder(x, 0.5, z, 0.32, 1.0, trashCanMat, 10);
+      addCylinder(x, 1.03, z, 0.34, 0.08, trashLidMat, 10);
+    }
+    function buildDumpster(x, z, rotY){
+      const w = 2.2, h = 1.3, d = 1.4;
+      const mesh = addBox(x, h/2, z, w, h, d, dumpsterMat);
+      mesh.rotation.y = rotY || 0;
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(w+0.1, 0.12, d+0.1), dumpsterLidMat);
+      lid.position.set(x, h + 0.06, z);
+      lid.rotation.y = rotY || 0;
+      scene.add(lid);
+    }
+    function buildBench(x, z, rotY){
+      const r = rotY || 0;
+      const mesh = addBox(x, 0.5, z, 1.6, 0.08, 0.5, benchMat);
+      mesh.rotation.y = r;
+      const backrest = addBox(x, 0.85, z, 1.6, 0.06, 0.08, benchMat);
+      backrest.rotation.y = r;
+      const legDx = 0.65;
+      [-legDx, legDx].forEach(dx => {
+        const lx = x + dx*Math.cos(r), lz = z - dx*Math.sin(r);
+        addBox(lx, 0.25, lz, 0.08, 0.5, 0.45, benchLegMat);
+      });
+    }
+    function buildBikeRack(x, z, rotY){
+      for (let i = 0; i < 3; i++){
+        const off = (i-1) * 0.55;
+        const rx = x + off*Math.cos(rotY||0), rz = z - off*Math.sin(rotY||0);
+        addBox(rx, 0.4, rz, 0.06, 0.8, 0.5, bikeRackMat);
+      }
+    }
+    function buildHydrant(x, z){
+      addCylinder(x, 0.35, z, 0.16, 0.7, hydrantMat, 8);
+      addCylinder(x, 0.62, z, 0.2, 0.12, hydrantMat, 8);
+      addBox(x+0.18, 0.5, z, 0.14, 0.14, 0.14, hydrantMat);
+      addBox(x-0.18, 0.5, z, 0.14, 0.14, 0.14, hydrantMat);
+    }
+    function buildParkedVan(x, z, rotY){
+      const mesh = addBox(x, 0.9, z, 4.4, 1.8, 1.9, vanMat);
+      mesh.rotation.y = rotY || 0;
+      const cabDx = 1.6;
+      const gx = x + cabDx*Math.cos(rotY||0), gz = z - cabDx*Math.sin(rotY||0);
+      const glass = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 1.7), vanGlassMat);
+      glass.position.set(gx, 1.35, gz);
+      glass.rotation.y = rotY || 0;
+      scene.add(glass);
+    }
+
+    // Scatter street furniture along a block's four sidewalk edges,
+    // keeping items snug against the curb/building line so the roadway
+    // and block interior stay clear for flying.
+    function furnishBlockSidewalks(bx, bz, styleSeed){
+      const inner = BLOCK/2;
+      const walkMid = inner + SIDEWALK_W/2; // sidewalk centerline offset from block center
+      const edgeSpots = [
+        { axis: 'top',    x: bx, z: bz - walkMid },
+        { axis: 'bottom', x: bx, z: bz + walkMid },
+        { axis: 'left',   x: bx - walkMid, z: bz },
+        { axis: 'right',  x: bx + walkMid, z: bz },
+      ];
+      edgeSpots.forEach((spot, si) => {
+        const isHoriz = spot.axis === 'top' || spot.axis === 'bottom';
+        const range = inner * 0.85;
+        const items = 3 + Math.floor(cityRand()*2);
+        for (let i = 0; i < items; i++){
+          const t = -range + (i/(items-1||1)) * range*2 + cityRange(-2, 2);
+          const px = isHoriz ? bx + t : spot.x;
+          const pz = isHoriz ? spot.z : bz + t;
+          const roll = cityRand();
+          if (roll < 0.32) buildTree(px, pz);
+          else if (roll < 0.45) buildTrashCan(px, pz);
+          else if (roll < 0.55) buildBench(px, pz, isHoriz ? 0 : Math.PI/2);
+          else if (roll < 0.65) buildBikeRack(px, pz, isHoriz ? 0 : Math.PI/2);
+          else if (roll < 0.72) buildHydrant(px, pz);
+          else if (roll < 0.8) buildPlanterTree(px, pz);
+          else { /* leave gap - keeps sidewalks from feeling too cluttered */ }
+        }
+      });
+      // one dumpster + maybe a parked van tucked near a back corner of the
+      // block (simulating a service alley), off the main sidewalk flow
+      const corner = cityPick([[-1,-1],[1,-1],[-1,1],[1,1]]);
+      const dx = bx + corner[0]*(inner + SIDEWALK_W + 1.6);
+      const dz = bz + corner[1]*(inner + SIDEWALK_W + 1.6);
+      buildDumpster(dx, dz, cityRange(0, Math.PI));
+      if (cityRand() < 0.5){
+        buildParkedVan(bx + corner[0]*(inner-2), bz + corner[1]*(inner + SIDEWALK_W - 1), corner[1] !== 0 ? Math.PI/2 : 0);
+      }
     }
 
     // ---- lay out several buildings per block along the sidewalk-adjacent
-    // interior, leaving a clear central gap in each block for flight lines
-    // and visual variety between blocks ----
+    // interior, leaving a clear central gap in each block for flight lines.
+    // Building style is picked per-slot for variety along every street
+    // frontage instead of repeating one tower type per block. ----
     function populateBlock(bx, bz, seedOffset){
       const usable = BLOCK - SIDEWALK_W*2 - 4; // interior buildable footprint
-      // 2x2 arrangement of towers per block with varied heights, spaced so
-      // there's a wide open gap through the block's center.
       const slotOffset = usable * 0.28;
-      const footprint = usable * 0.34;
       const slots = [
         { dx: -slotOffset, dz: -slotOffset },
         { dx:  slotOffset, dz: -slotOffset },
@@ -988,24 +1288,23 @@
         { dx:  slotOffset, dz:  slotOffset },
       ];
       slots.forEach((s, i) => {
-        const floors = 6 + ((seedOffset + i * 3) % 9); // 6-14 floors, varied
-        const floorH = 3.4;
-        buildOfficeTower(bx + s.dx, bz + s.dz, footprint, footprint, floors, floorH);
+        const floors = 6 + ((seedOffset + i * 3 + Math.floor(cityRand()*4)) % 12); // 6-17 floors, varied
+        const floorH = 3.2 + cityRange(-0.2, 0.3);
+        const footprint = usable * cityRange(0.30, 0.40);
+        const style = buildingStyles[(seedOffset + i + Math.floor(cityRand()*buildingStyles.length)) % buildingStyles.length];
+        style(bx + s.dx, bz + s.dz, footprint, footprint, floors, floorH);
       });
+      furnishBlockSidewalks(bx, bz, seedOffset);
     }
-    populateBlock(blockCenters[0].x, blockCenters[0].z, 0);
-    populateBlock(blockCenters[1].x, blockCenters[1].z, 2);
-    populateBlock(blockCenters[2].x, blockCenters[2].z, 5);
-    populateBlock(blockCenters[3].x, blockCenters[3].z, 7);
+    blockCenters.forEach((b, i) => populateBlock(b.x, b.z, i * 3 + 1));
 
     // ---- streetlights: poles with lamp heads along both sides of every
     // street segment, spaced evenly ----
     function buildStreetlight(x, z, facingInward){
       const poleH = 6.5;
       addCylinder(x, poleH/2, z, 0.09, poleH, poleMat, 8);
-      // arm reaching out over the road/sidewalk toward the street
       const armLen = 1.6;
-      const dir = facingInward; // {x,z} unit-ish direction the arm points
+      const dir = facingInward;
       addBox(x + dir.x*armLen/2, poleH - 0.15, z + dir.z*armLen/2, Math.abs(dir.x)>Math.abs(dir.z)?armLen:0.12, 0.12, Math.abs(dir.z)>=Math.abs(dir.x)?armLen:0.12, poleMat);
       addCylinder(x + dir.x*armLen, poleH - 0.35, z + dir.z*armLen, 0.28, 0.22, lampMat, 8);
     }
@@ -1020,14 +1319,18 @@
         }
       }
     }
-    const streetEdge = STREET_W/2 + SIDEWALK_W + 0.6;
-    const spanReach = CITY_OFFSET + 18;
-    // lights along the vertical street (runs north-south), both curbsides
-    lineOfLights(true, -streetEdge, -spanReach, spanReach, 14, 1);
-    lineOfLights(true,  streetEdge, -spanReach, spanReach, 14, -1);
-    // lights along the horizontal street (runs east-west), both curbsides
-    lineOfLights(false, -streetEdge, -spanReach, spanReach, 14, 1);
-    lineOfLights(false,  streetEdge, -spanReach, spanReach, 14, -1);
+    const streetEdgeOffset = STREET_W/2 + SIDEWALK_W + 0.6;
+    streetCoords.forEach(c => {
+      lineOfLights(true, c - streetEdgeOffset + STREET_W, -spanReach, spanReach, 14, 1);
+      lineOfLights(true, c + streetEdgeOffset - STREET_W, -spanReach, spanReach, 14, -1);
+    });
+    // simpler: place lights directly along each street's two curbsides
+    streetCoords.forEach(c => {
+      lineOfLights(true, c - (STREET_W/2 + SIDEWALK_W + 0.6), -spanReach, spanReach, 14, 1);
+      lineOfLights(true, c + (STREET_W/2 + SIDEWALK_W + 0.6), -spanReach, spanReach, 14, -1);
+      lineOfLights(false, c - (STREET_W/2 + SIDEWALK_W + 0.6), -spanReach, spanReach, 14, 1);
+      lineOfLights(false, c + (STREET_W/2 + SIDEWALK_W + 0.6), -spanReach, spanReach, 14, -1);
+    });
 
     // ---- power lines: utility poles with cross-arms strung with drooping
     // wires, placed along the outer block edges (set back from the
@@ -1036,11 +1339,10 @@
       const poleH = 8.5;
       const top = poleH;
       addCylinder(x, poleH/2, z, 0.11, poleH, poleMat, 8);
-      addBox(x, top - 0.3, z, 2.6, 0.14, 0.14, poleMat); // cross-arm
+      addBox(x, top - 0.3, z, 2.6, 0.14, 0.14, poleMat);
       return { x, y: top - 0.3, z };
     }
     function sagWire(p0, p1, sag, segs, mat){
-      // approximate a catenary with a handful of short box segments
       const n = segs || 8;
       let prev = p0;
       for (let i = 1; i <= n; i++){
@@ -1061,32 +1363,27 @@
         prev = cur;
       }
     }
-    // run a line of utility poles just outside each block's sidewalk, along
-    // the two outer (city-perimeter) edges, so wires cross over open
-    // ground rather than through the flight corridors above the streets
-    function buildPowerLineRun(fixedCoord, from, to, isVertical, outwardOffset){
+    function buildPowerLineRun(fixedCoord, from, to, isVertical){
       const spacing = 24;
       const count = Math.floor(Math.abs(to - from) / spacing);
       let lastTop = null;
       for (let i = 0; i <= count; i++){
         const t = from + i * spacing * Math.sign(to - from);
-        const x = isVertical ? fixedCoord + outwardOffset : t;
-        const z = isVertical ? t : fixedCoord + outwardOffset;
+        const x = isVertical ? fixedCoord : t;
+        const z = isVertical ? t : fixedCoord;
         const top = buildUtilityPole(x, z);
         if (lastTop) sagWire(lastTop, top, 0.6, 6, wireMat);
         lastTop = top;
       }
     }
     const outerEdge = CITY_OFFSET + 6;
-    buildPowerLineRun(-outerEdge, -spanReach, spanReach, false, 0); // north perimeter
-    buildPowerLineRun( outerEdge, -spanReach, spanReach, false, 0); // south perimeter
-    buildPowerLineRun(-outerEdge, -spanReach, spanReach, true, 0);  // west perimeter
-    buildPowerLineRun( outerEdge, -spanReach, spanReach, true, 0);  // east perimeter
+    buildPowerLineRun(-outerEdge, -spanReach, spanReach, false); // north perimeter
+    buildPowerLineRun( outerEdge, -spanReach, spanReach, false); // south perimeter
+    buildPowerLineRun(-outerEdge, -spanReach, spanReach, true);  // west perimeter
+    buildPowerLineRun( outerEdge, -spanReach, spanReach, true);  // east perimeter
 
-    // ---- traffic lights at the central four-way intersection ----
+    // ---- traffic lights at every four-way intersection ----
     function buildTrafficSignal(x, z, facing){
-      // mast arm pole on the corner, extending a signal head out over
-      // the lane it controls
       const poleH = 5.6;
       addCylinder(x, poleH/2, z, 0.11, poleH, poleMat, 8);
       const armLen = STREET_W/2 - 0.5;
@@ -1101,10 +1398,14 @@
       addCylinder(headX, headY - 0.42, headZ, 0.16, 0.16, greenLightMat, 10);
     }
     const cornerSet = STREET_W/2 + 0.8;
-    buildTrafficSignal(-cornerSet, -cornerSet, { x: 1, z: 1 });
-    buildTrafficSignal( cornerSet, -cornerSet, { x: -1, z: 1 });
-    buildTrafficSignal(-cornerSet,  cornerSet, { x: 1, z: -1 });
-    buildTrafficSignal( cornerSet,  cornerSet, { x: -1, z: -1 });
+    streetCoords.forEach(sx => {
+      streetCoords.forEach(sz => {
+        buildTrafficSignal(sx - cornerSet, sz - cornerSet, { x: 1, z: 1 });
+        buildTrafficSignal(sx + cornerSet, sz - cornerSet, { x: -1, z: 1 });
+        buildTrafficSignal(sx - cornerSet, sz + cornerSet, { x: 1, z: -1 });
+        buildTrafficSignal(sx + cornerSet, sz + cornerSet, { x: -1, z: -1 });
+      });
+    });
 
     buildDrone();
   }
