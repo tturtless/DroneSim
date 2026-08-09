@@ -1489,6 +1489,23 @@
     const hoopBlackMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.45, metalness: 0.15 });
     function checkerMat(i){ return (i % 2 === 0) ? hoopWhiteMat : hoopBlackMat; }
 
+    // a repeatable black/white striped canvas texture, applied along a
+    // tube's length so each strut renders as ONE continuous smooth
+    // cylinder — no stacked segment seams, so no z-fighting/flicker
+    // up close. stripeCount controls how many bands fit a "standard"
+    // 1-unit length; longer struts get more bands via UV repeat.
+    const hoopStripeCanvas = document.createElement('canvas');
+    hoopStripeCanvas.width = 8; hoopStripeCanvas.height = 64;
+    const hoopStripeCtx = hoopStripeCanvas.getContext('2d');
+    hoopStripeCtx.fillStyle = '#f0f0ea';
+    hoopStripeCtx.fillRect(0, 0, 8, 32);
+    hoopStripeCtx.fillStyle = '#161616';
+    hoopStripeCtx.fillRect(0, 32, 8, 32);
+    const hoopStripeTexture = new THREE.CanvasTexture(hoopStripeCanvas);
+    hoopStripeTexture.wrapS = THREE.RepeatWrapping;
+    hoopStripeTexture.wrapT = THREE.RepeatWrapping;
+    const hoopStripeMat = new THREE.MeshStandardMaterial({ map: hoopStripeTexture, roughness: 0.4, metalness: 0.12 });
+
     // orient a mesh (built standing along +Y by default, e.g. addCylinder)
     // so its Y axis points along unit direction (ux,uy,uz)
     function orientAlong(mesh, ux, uy, uz){
@@ -1498,25 +1515,25 @@
       mesh.quaternion.copy(quat);
     }
 
-    // a single straight strut made of alternating black/white round-tube
-    // segments (the striped-pole look from the reference kit), from p0 to p1
-    function checkerStrut(p0, p1, thick, segStart){
+    // a single straight strut rendered as ONE smooth cylinder with a
+    // tiled black/white stripe texture running along its length (the
+    // striped-pole look from the reference kit), from p0 to p1
+    function checkerStrut(p0, p1, thick){
       const len = Math.hypot(p1.x-p0.x, p1.y-p0.y, p1.z-p0.z);
-      const segLen = 0.4;
-      const segs = Math.max(1, Math.round(len / segLen));
-      for (let i = 0; i < segs; i++){
-        const t0 = i/segs, t1 = (i+1)/segs;
-        const mt = (t0+t1)/2;
-        const mx = p0.x + (p1.x-p0.x)*mt, my = p0.y + (p1.y-p0.y)*mt, mz = p0.z + (p1.z-p0.z)*mt;
-        const segMesh = addCylinder(mx, my, mz, thick, len/segs + 0.03, checkerMat(i + (segStart||0)), 8);
-        orientAlong(segMesh, p1.x-p0.x, p1.y-p0.y, p1.z-p0.z);
-        // shrink the collision footprint of each tube segment slightly
-        // below its visual radius so the open hoop center stays clear
-        // and neighboring segments don't overlap-block each other
-        const lastObstacle = obstacles[obstacles.length - 1];
-        if (lastObstacle) lastObstacle.r = thick * 0.9;
-      }
+      const mx = (p0.x+p1.x)/2, my = (p0.y+p1.y)/2, mz = (p0.z+p1.z)/2;
+      const geo = new THREE.CylinderGeometry(thick, thick, len, 10, 1);
+      const mat = hoopStripeMat.clone();
+      mat.map = hoopStripeTexture.clone();
+      mat.map.needsUpdate = true;
+      const stripesPerUnit = 2.6; // stripe bands per world-unit of length
+      mat.map.repeat.set(1, Math.max(1, Math.round(len * stripesPerUnit)));
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(mx, my, mz);
+      orientAlong(mesh, p1.x-p0.x, p1.y-p0.y, p1.z-p0.z);
+      scene.add(mesh);
+      obstacles.push({ mesh, type: 'cylinder', r: thick * 0.9, h: len });
     }
+
 
     // hexagon hoop: six checkerboard tube struts forming a ring, oriented
     // by a normal vector (nx,ny,nz) so it can face any direction — flat
@@ -1542,7 +1559,7 @@
         });
       }
       for (let i = 0; i < 6; i++){
-        checkerStrut(pts[i], pts[(i+1)%6], thick, i);
+        checkerStrut(pts[i], pts[(i+1)%6], thick);
       }
     }
 
@@ -1563,13 +1580,15 @@
         { x: x + u.x*-hw + v.x* hh, y: y + u.y*-hw + v.y* hh, z: z + u.z*-hw + v.z* hh },
       ];
       for (let i = 0; i < 4; i++){
-        checkerStrut(corners[i], corners[(i+1)%4], thick, i);
+        checkerStrut(corners[i], corners[(i+1)%4], thick);
       }
     }
 
     // pentagon hoop variant, matching the pentagon shape seen in the kit
-    function pentaHoop(x, y, z, radius, nx, ny, nz, rollDeg){
-      radius = radius || 1.8;
+    // "double box" hoop: two square rings stacked a short distance apart
+    // along the normal axis and linked by corner struts — a stubby gate
+    // tunnel to fly straight through, replacing the old pentagon shape
+    function doubleBoxHoop(x, y, z, w, h, nx, ny, nz, rollDeg){
       const thick = 0.1;
       const roll = (rollDeg||0) * Math.PI/180;
       const n = new THREE.Vector3(nx,ny,nz).normalize();
@@ -1577,15 +1596,20 @@
       let u = new THREE.Vector3().crossVectors(up, n).normalize();
       let v = new THREE.Vector3().crossVectors(n, u).normalize();
       u.applyAxisAngle(n, roll); v.applyAxisAngle(n, roll);
-      const pts = [];
-      for (let i = 0; i < 5; i++){
-        const a = (i/5) * Math.PI * 2 - Math.PI/2;
-        const ux = Math.cos(a) * radius, vy = Math.sin(a) * radius;
-        pts.push({ x: x + u.x*ux + v.x*vy, y: y + u.y*ux + v.y*vy, z: z + u.z*ux + v.z*vy });
+      const hw = w/2, hh = h/2, gap = Math.min(w, h) * 0.55;
+      function ringAt(cx, cy, cz){
+        const corners = [
+          { x: cx + u.x*-hw + v.x*-hh, y: cy + u.y*-hw + v.y*-hh, z: cz + u.z*-hw + v.z*-hh },
+          { x: cx + u.x* hw + v.x*-hh, y: cy + u.y* hw + v.y*-hh, z: cz + u.z* hw + v.z*-hh },
+          { x: cx + u.x* hw + v.x* hh, y: cy + u.y* hw + v.y* hh, z: cz + u.z* hw + v.z* hh },
+          { x: cx + u.x*-hw + v.x* hh, y: cy + u.y*-hw + v.y* hh, z: cz + u.z*-hw + v.z* hh },
+        ];
+        for (let i = 0; i < 4; i++) checkerStrut(corners[i], corners[(i+1)%4], thick);
+        return corners;
       }
-      for (let i = 0; i < 5; i++){
-        checkerStrut(pts[i], pts[(i+1)%5], thick, i);
-      }
+      const c0 = ringAt(x - n.x*gap/2, y - n.y*gap/2, z - n.z*gap/2);
+      const c1 = ringAt(x + n.x*gap/2, y + n.y*gap/2, z + n.z*gap/2);
+      for (let i = 0; i < 4; i++) checkerStrut(c0[i], c1[i], thick * 0.8);
     }
 
     // a short mounting arm bolting a hoop to a wall or roof edge, so
@@ -1597,6 +1621,32 @@
       const arm = addCylinder(ex, ey, ez, 0.07, len, hoopBlackMat, 8);
       orientAlong(arm, n.x, n.y, n.z);
     }
+
+    // a chain of hex hoops along a straight line, all facing the same
+    // direction — a "hoop tunnel" pilots fly a continuous line through
+    function hoopTunnel(x, y, z, dirx, diry, dirz, radius, count, spacing, rollJitter){
+      const d = new THREE.Vector3(dirx, diry, dirz).normalize();
+      for (let i = 0; i < count; i++){
+        const t = (i - (count-1)/2) * spacing;
+        hexHoop(x + d.x*t, y + d.y*t, z + d.z*t, radius, d.x, d.y, d.z, (rollJitter||0));
+      }
+    }
+
+    // a line of vertical weave poles (striped, planted upright) spaced
+    // for slalom S-turns — alternate left/right offset from the centerline
+    function weavePoles(x, y, z, dirx, dirz, count, spacing, lateralOffset, poleHeight){
+      const len = Math.hypot(dirx, dirz) || 1;
+      const dx = dirx/len, dz = dirz/len;
+      const perpx = -dz, perpz = dx; // perpendicular to travel direction
+      for (let i = 0; i < count; i++){
+        const t = i * spacing;
+        const side = (i % 2 === 0) ? 1 : -1;
+        const px = x + dx*t + perpx*lateralOffset*side;
+        const pz = z + dz*t + perpz*lateralOffset*side;
+        checkerStrut({ x: px, y: y, z: pz }, { x: px, y: y + poleHeight, z: pz }, 0.09);
+      }
+    }
+
 
     function buildDroneCourse(){
       let seed = 7331;
@@ -1616,7 +1666,7 @@
           const kind = i % 3;
           if (kind === 0) hexHoop(sx + drift, y, gz, 2.0 + rnd()*0.6, 0, 0, 1, rnd()*40-20);
           else if (kind === 1) rectHoop(sx + drift, y, gz, 3.4, 3.4, 0.15, 0, 1, rnd()*30-15);
-          else pentaHoop(sx + drift, y, gz, 1.9, 0.1, 0, 1, rnd()*40-20);
+          else doubleBoxHoop(sx + drift, y, gz, 3.0, 3.0, 0.1, 0, 1, rnd()*40-20);
         }
       });
       streetCoords.forEach((sz) => {
@@ -1629,13 +1679,15 @@
           const kind = (i+1) % 3;
           if (kind === 0) hexHoop(gx, y, sz + drift, 2.0 + rnd()*0.6, 1, 0, 0, rnd()*40-20);
           else if (kind === 1) rectHoop(gx, y, sz + drift, 3.4, 3.4, 1, 0, 0.15, rnd()*30-15);
-          else pentaHoop(gx, y, sz + drift, 1.9, 1, 0, 0.1, rnd()*40-20);
+          else doubleBoxHoop(gx, y, sz + drift, 3.0, 3.0, 1, 0, 0.1, rnd()*40-20);
         }
       });
 
       // ---- 2) Hoops mounted flush onto building side walls, at varied
       // heights up the facade, with a short arm standing them off the
-      // glass — a nod to the wall-mounted look in the reference kit. ----
+      // glass — a nod to the wall-mounted look in the reference kit.
+      // Denser than before: most faces get one, some get two at
+      // different heights on the same wall. ----
       blockCenters.forEach((b, bi) => {
         if (isSpecialBlock(b)) return;
         const usable = BLOCK - SIDEWALK_W*2 - 4;
@@ -1645,18 +1697,20 @@
           { dx: -slotOffset, dz: slotOffset }, { dx: slotOffset, dz: slotOffset },
         ];
         slots.forEach((s, si) => {
-          if (rnd() > 0.55) return; // not every building face gets one
+          if (rnd() > 0.8) return; // almost every building face gets one
           const footprint = usable * 0.35;
           const faceDir = pick([[1,0,0],[-1,0,0],[0,0,1],[0,0,-1]]);
           const fx = b.x + s.dx + faceDir[0]*footprint/2;
           const fz = b.z + s.dz + faceDir[2]*footprint/2;
-          const fy = 5 + rnd()*22;
-          mountArm(fx, fy, fz, faceDir[0], 0, faceDir[2], 1.0);
-          const hoopX = fx + faceDir[0]*1.1, hoopZ = fz + faceDir[2]*1.1;
-          const kind = si % 3;
-          if (kind === 0) hexHoop(hoopX, fy, hoopZ, 1.5, faceDir[0], 0, faceDir[2], 0);
-          else if (kind === 1) rectHoop(hoopX, fy, hoopZ, 2.6, 2.6, faceDir[0], 0, faceDir[2], 0);
-          else pentaHoop(hoopX, fy, hoopZ, 1.4, faceDir[0], 0, faceDir[2], 0);
+          const heights = rnd() > 0.5 ? [5 + rnd()*8] : [4 + rnd()*6, 14 + rnd()*10];
+          heights.forEach((fy, hi) => {
+            mountArm(fx, fy, fz, faceDir[0], 0, faceDir[2], 1.0);
+            const hoopX = fx + faceDir[0]*1.1, hoopZ = fz + faceDir[2]*1.1;
+            const kind = (si + hi) % 3;
+            if (kind === 0) hexHoop(hoopX, fy, hoopZ, 1.5, faceDir[0], 0, faceDir[2], 0);
+            else if (kind === 1) rectHoop(hoopX, fy, hoopZ, 2.6, 2.6, faceDir[0], 0, faceDir[2], 0);
+            else doubleBoxHoop(hoopX, fy, hoopZ, 2.2, 2.2, faceDir[0], 0, faceDir[2], 0);
+          });
         });
       });
 
@@ -1673,7 +1727,7 @@
         const roofFloors = 6 + (Math.floor(rnd()*12));
         const roofH = roofFloors * 3.3;
         slots.forEach((s) => {
-          if (rnd() > 0.4) return;
+          if (rnd() > 0.6) return;
           const rx = b.x + s.dx + (rnd()*6-3), rz = b.z + s.dz + (rnd()*6-3);
           const ry = roofH + rnd()*10 + 4; // roughly at/above this building's rough height
           const standH = 1.8;
@@ -1681,7 +1735,7 @@
           const kind = Math.floor(rnd()*3);
           if (kind === 0) hexHoop(rx, ry, rz, 1.6, 0, 1, 0.2, rnd()*360);
           else if (kind === 1) rectHoop(rx, ry, rz, 2.8, 2.8, 0, 1, 0.2, rnd()*360);
-          else pentaHoop(rx, ry, rz, 1.5, 0, 1, 0.2, rnd()*360);
+          else doubleBoxHoop(rx, ry, rz, 2.4, 2.4, 0, 1, 0.2, rnd()*360);
         });
       });
 
@@ -1693,15 +1747,19 @@
         const cluster = [
           { dx: -6, dz: -4, y: 6,  r: 1.8 }, { dx: 5, dz: -3, y: 8,  r: 2.0 },
           { dx: -3, dz: 5,  y: 10, r: 1.6 }, { dx: 6, dz: 4,  y: 12, r: 2.2 },
-          { dx: 0,  dz: 0,  y: 14, r: 2.4 },
+          { dx: 0,  dz: 0,  y: 14, r: 2.4 }, { dx: -7, dz: 2, y: 9,  r: 1.7 },
+          { dx: 3,  dz: 7,  y: 11, r: 1.9 },
         ];
         cluster.forEach((c, i) => {
           const kind = i % 3;
           const nx = rnd()*0.6-0.3, nz = rnd()*0.6-0.3;
           if (kind === 0) hexHoop(plaza.x+c.dx, c.y, plaza.z+c.dz, c.r, nx, 1, nz, rnd()*360);
           else if (kind === 1) rectHoop(plaza.x+c.dx, c.y, plaza.z+c.dz, c.r*1.5, c.r*1.5, nx, 1, nz, rnd()*360);
-          else pentaHoop(plaza.x+c.dx, c.y, plaza.z+c.dz, c.r, nx, 1, nz, rnd()*360);
+          else doubleBoxHoop(plaza.x+c.dx, c.y, plaza.z+c.dz, c.r*1.4, c.r*1.4, nx, 1, nz, rnd()*360);
         });
+        // a hoop tunnel strung diagonally across the plaza airspace —
+        // a continuous line of rings to fly straight through
+        hoopTunnel(plaza.x - 10, 7, plaza.z - 10, 1, 0.05, 1, 1.9, 6, 3.6, 6);
       }
       const park = blockCenters.find(b => b.gx === PARK_BLOCK.gx && b.gz === PARK_BLOCK.gz);
       if (park){
@@ -1711,8 +1769,23 @@
           const kind = i % 3;
           if (kind === 0) hexHoop(pondX+c.dx, c.y, pondZ+c.dz, 1.8, 0.1, 1, 0, rnd()*360);
           else if (kind === 1) rectHoop(pondX+c.dx, c.y, pondZ+c.dz, 2.6, 2.6, 0.1, 1, 0, rnd()*360);
-          else pentaHoop(pondX+c.dx, c.y, pondZ+c.dz, 1.6, 0.1, 1, 0, rnd()*360);
+          else doubleBoxHoop(pondX+c.dx, c.y, pondZ+c.dz, 2.2, 2.2, 0.1, 1, 0, rnd()*360);
         });
+        // a weave-pole slalom line down the open lawn near the stage
+        weavePoles(park.x + inner*0.1, 0, park.z - inner*0.55, 1, 0.15, 6, 3.2, 1.6, 3.2);
+      }
+
+      // ---- 5) Ground-level hoop tunnels threaded low along a couple of
+      // the wide street corridors — a continuous chain of rings just
+      // above head height, distinct from the higher mid-air hoops. ----
+      hoopTunnel(streetCoords[0], 4.5, -spanReach * 0.4, 0, 0.03, 1, 1.6, 5, 4.5, 8);
+      hoopTunnel(streetCoords[1], 4.8, spanReach * 0.35, 0, -0.03, 1, 1.6, 5, 4.5, -8);
+
+      // ---- 6) A second weave-pole slalom line down the plaza's open
+      // sidewalk stretch, for tight low-altitude S-turn practice. ----
+      if (plaza){
+        const inner = BLOCK/2 - SIDEWALK_W - 2;
+        weavePoles(plaza.x - inner*0.7, 0, plaza.z - inner*0.85, 0.1, 1, 6, 3.4, 1.7, 3.0);
       }
     }
     buildDroneCourse();
