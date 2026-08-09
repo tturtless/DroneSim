@@ -1323,7 +1323,230 @@
       });
       furnishBlockSidewalks(bx, bz, seedOffset);
     }
-    blockCenters.forEach((b, i) => populateBlock(b.x, b.z, i * 3 + 1));
+    // The center block becomes a civic skate plaza, and one corner block
+    // becomes a public park — both skipped here and built separately below
+    // so real downtowns read as more than wall-to-wall commercial towers.
+    const PLAZA_BLOCK = { gx: 0, gz: 0 };
+    const PARK_BLOCK = { gx: 1, gz: 1 };
+    function isSpecialBlock(b){
+      return (b.gx === PLAZA_BLOCK.gx && b.gz === PLAZA_BLOCK.gz) ||
+             (b.gx === PARK_BLOCK.gx && b.gz === PARK_BLOCK.gz);
+    }
+    blockCenters.forEach((b, i) => { if (!isSpecialBlock(b)) populateBlock(b.x, b.z, i * 3 + 1); });
+
+    // ===================================================================
+    // CIVIC FEATURES — the things that make people actually like living
+    // downtown: a public plaza with a skate spot (the city's answer to
+    // Austin's skate culture), a park with a pond and paths, transit
+    // stops, bike lanes, food trucks, and public art scattered through
+    // the commercial blocks. All still built via addBox/addCylinder so
+    // it's part of the same collidable obstacle system.
+    // ===================================================================
+    const concreteMat = new THREE.MeshStandardMaterial({ color: 0xb7b6ad, roughness: 0.85 });
+    const skateRailMat = new THREE.MeshStandardMaterial({ color: 0xcfcfd6, metalness: 0.7, roughness: 0.25 });
+    const skateRampMat = new THREE.MeshStandardMaterial({ color: 0x8f8f88, roughness: 0.8 });
+    const muralMats = [
+      new THREE.MeshStandardMaterial({ color: 0xe0563f, roughness: 0.8 }),
+      new THREE.MeshStandardMaterial({ color: 0x3f9ee0, roughness: 0.8 }),
+      new THREE.MeshStandardMaterial({ color: 0xe0c53f, roughness: 0.8 }),
+      new THREE.MeshStandardMaterial({ color: 0x5fbf6b, roughness: 0.8 }),
+    ];
+    const waterMat = new THREE.MeshStandardMaterial({ color: 0x2f6f8f, roughness: 0.15, metalness: 0.2, transparent: true, opacity: 0.85 });
+    const fountainMat = new THREE.MeshStandardMaterial({ color: 0xa8a89c, roughness: 0.7 });
+    const grassPatchMat = new THREE.MeshStandardMaterial({ color: 0x4a8f3f, roughness: 0.95 });
+    const pathMat = new THREE.MeshStandardMaterial({ color: 0xc9b896, roughness: 0.9 });
+    const stageMat = new THREE.MeshStandardMaterial({ color: 0x6b5a4a, roughness: 0.8 });
+    const busShelterMat = new THREE.MeshStandardMaterial({ color: 0x3a4a52, transparent: true, opacity: 0.55, metalness: 0.3 });
+    const busSignMat = new THREE.MeshStandardMaterial({ color: 0x1f6fae, roughness: 0.5 });
+    const foodTruckMats = [
+      new THREE.MeshStandardMaterial({ color: 0xe0563f, roughness: 0.5, metalness: 0.3 }),
+      new THREE.MeshStandardMaterial({ color: 0x3fbf7f, roughness: 0.5, metalness: 0.3 }),
+      new THREE.MeshStandardMaterial({ color: 0xe8c93f, roughness: 0.5, metalness: 0.3 }),
+    ];
+    const bikeLaneMat = new THREE.MeshStandardMaterial({ color: 0x2e7d46, roughness: 0.8 });
+    const solarPanelMat = new THREE.MeshStandardMaterial({ color: 0x1c2a44, metalness: 0.5, roughness: 0.3 });
+    const dogParkFenceMat = new THREE.MeshStandardMaterial({ color: 0x556655, metalness: 0.4, roughness: 0.5 });
+
+    // ---- Skate plaza (center block): ledges, rails, a hip ramp, stairs
+    // with a handrail, and a bowl edge — classic street-skate spot
+    // geometry that also happens to make a great slalom course for FPV. ----
+    function buildSkatePlaza(bx, bz){
+      const inner = BLOCK/2 - SIDEWALK_W - 2;
+      // open plaza deck (concrete, replaces the usual building footprint)
+      addBox(bx, 0.08, bz, inner*2, 0.16, inner*2, concreteMat);
+      // scatter a few planters + trees around the edge for shade/seating
+      [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx,sz]) => {
+        buildPlanterTree(bx + sx*inner*0.75, bz + sz*inner*0.75);
+      });
+      // ledges (low skateable boxes) in a loose ring
+      const ledgeSpots = [
+        { x: -inner*0.5, z: -inner*0.35, w: 5.5, rot: 0 },
+        { x:  inner*0.5, z: -inner*0.35, w: 5.5, rot: 0 },
+        { x: -inner*0.4, z:  inner*0.45, w: 4.5, rot: Math.PI/2 },
+      ];
+      ledgeSpots.forEach(l => {
+        const mesh = addBox(bx + l.x, 0.32, bz + l.z, l.w, 0.64, 1.1, concreteMat);
+        mesh.rotation.y = l.rot;
+      });
+      // stair set + handrail, a signature street-skate feature
+      const stairX = bx + inner*0.15, stairZ = bz - inner*0.05;
+      for (let i = 0; i < 5; i++){
+        addBox(stairX + i*0.9, 0.15*(i+1), stairZ, 0.9, 0.3*(i+1), 3.2, concreteMat);
+      }
+      addCylinder(stairX - 0.5, 1.2, stairZ - 1.6, 0.05, 2.4, skateRailMat, 8);
+      const railTop = addBox(stairX + 1.7, 1.35, stairZ - 1.6, 4.2, 0.06, 0.06, skateRailMat);
+      railTop.rotation.z = Math.atan2(0.85, 4.2);
+      // hip/quarter-pipe ramp for launching airs
+      const rampGrp = new THREE.Group();
+      const rampGeo = new THREE.BoxGeometry(4.5, 0.25, 3.5);
+      const ramp = new THREE.Mesh(rampGeo, skateRampMat);
+      ramp.position.set(bx - inner*0.55, 1.1, bz + inner*0.4);
+      ramp.rotation.x = -0.55;
+      scene.add(ramp);
+      obstacles.push({ mesh: ramp, type: 'box', w: 4.5, h: 0.25, d: 3.5 });
+      // a couple of skate rails to grind, floating just above the deck
+      [[-inner*0.15, inner*0.1],[inner*0.2, inner*0.15]].forEach(([rx,rz]) => {
+        const rail = addBox(bx+rx, 0.55, bz+rz, 4.0, 0.06, 0.06, skateRailMat);
+      });
+      // central public-art piece — a simple abstract sculpture, a nod to
+      // the kind of civic art installation every plaza like this gets
+      addCylinder(bx, 1.0, bz, 0.35, 2.0, fountainMat, 10);
+      addBox(bx, 2.3, bz, 1.8, 0.25, 0.25, muralMats[0]);
+      addBox(bx, 2.3, bz, 0.25, 0.25, 1.8, muralMats[1]);
+      // a mural on one flanking low wall
+      const muralWall = addBox(bx - inner*0.1, 1.4, bz - inner*0.6, 6, 2.8, 0.3, buildingMats[0]);
+      addBox(bx - inner*0.1, 1.4, bz - inner*0.6 + 0.16, 5.6, 2.4, 0.05, cityPick(muralMats));
+      // benches for spectators
+      buildBench(bx - inner*0.7, bz - inner*0.1, Math.PI/2);
+      buildBench(bx + inner*0.65, bz + inner*0.6, 0);
+      furnishBlockSidewalks(bx, bz, 9); // trees/trash/bikes still line the plaza's own sidewalks
+    }
+
+    // ---- Public park (one corner block): a pond, winding paths, open
+    // lawn, a small performance stage, and a fenced dog run. ----
+    function buildPark(bx, bz){
+      const inner = BLOCK/2 - SIDEWALK_W - 2;
+      // open lawn base
+      addBox(bx, 0.05, bz, inner*2, 0.1, inner*2, grassPatchMat);
+      // a pond in one quadrant
+      const pondX = bx - inner*0.35, pondZ = bz - inner*0.3;
+      addCylinder(pondX, 0.03, pondZ, 7.5, 0.06, waterMat, 20);
+      addCylinder(pondX, 0.09, pondZ, 8.1, 0.18, curbMat, 20); // stone rim
+      // winding path from the park entrance around the pond to a stage
+      const pathPts = [
+        { x: bx - inner*0.9, z: bz + inner*0.85 },
+        { x: bx - inner*0.5, z: bz + inner*0.3 },
+        { x: pondX + 8, z: pondZ + 2 },
+        { x: bx + inner*0.2, z: bz - inner*0.1 },
+        { x: bx + inner*0.55, z: bz - inner*0.6 },
+      ];
+      for (let i = 1; i < pathPts.length; i++){
+        const a = pathPts[i-1], b2 = pathPts[i];
+        const mx = (a.x+b2.x)/2, mz = (a.z+b2.z)/2;
+        const len = Math.hypot(b2.x-a.x, b2.z-a.z);
+        const angle = Math.atan2(b2.x-a.x, b2.z-a.z);
+        const seg = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.06, len), pathMat);
+        seg.position.set(mx, 0.09, mz);
+        seg.rotation.y = angle;
+        scene.add(seg); // walking path is cosmetic-only, low enough to skim over
+      }
+      // small performance stage + a few scattered trees for shade
+      const stageX = bx + inner*0.55, stageZ = bz - inner*0.6;
+      addBox(stageX, 0.5, stageZ, 6, 1.0, 4.5, stageMat);
+      addBox(stageX, 2.5, stageZ - 1.9, 6, 3.6, 0.2, concreteMat); // backdrop wall
+      [[-1,0],[1,0],[0,-1],[0.6,0.8],[-0.7,0.7]].forEach(([tx,tz]) => {
+        buildTree(bx + tx*inner*0.55, bz + tz*inner*0.55);
+      });
+      // fenced dog run in the remaining corner
+      const dogX = bx + inner*0.55, dogZ = bz + inner*0.55, dogR = 9;
+      const fencePosts = 14;
+      for (let i = 0; i < fencePosts; i++){
+        const ang = (i/fencePosts) * Math.PI * 2;
+        addCylinder(dogX + Math.cos(ang)*dogR, 0.5, dogZ + Math.sin(ang)*dogR, 0.05, 1.0, dogParkFenceMat, 6);
+      }
+      buildBench(dogX, dogZ, cityRange(0, Math.PI));
+      // benches + trash along the paths, a hydrant near the entrance
+      buildBench(bx - inner*0.55, bz + inner*0.2, Math.PI/2);
+      buildTrashCan(bx - inner*0.85, bz + inner*0.8);
+      buildHydrant(bx - inner*0.2, bz + inner*0.9);
+      furnishBlockSidewalks(bx, bz, 13);
+    }
+
+    blockCenters.forEach(b => {
+      if (b.gx === PLAZA_BLOCK.gx && b.gz === PLAZA_BLOCK.gz) buildSkatePlaza(b.x, b.z);
+      if (b.gx === PARK_BLOCK.gx && b.gz === PARK_BLOCK.gz) buildPark(b.x, b.z);
+    });
+
+    // ---- Bike lanes: a painted green lane along both curbsides of every
+    // street, between the parking/drive lane and the curb, giving cyclists
+    // (and the city a happier bike-friendliness score) their own strip. ----
+    function buildBikeLanes(){
+      const laneW = 1.4;
+      const laneOffsetFromCenter = STREET_W/2 - laneW/2 - 0.3;
+      const len = CITY_SPAN + 40;
+      streetCoords.forEach(c => {
+        addBox(c - laneOffsetFromCenter, 0.125, 0, laneW, 0.01, len, bikeLaneMat);
+        addBox(c + laneOffsetFromCenter, 0.125, 0, laneW, 0.01, len, bikeLaneMat);
+        addBox(0, 0.125, c - laneOffsetFromCenter, len, 0.01, laneW, bikeLaneMat);
+        addBox(0, 0.125, c + laneOffsetFromCenter, len, 0.01, laneW, bikeLaneMat);
+      });
+    }
+    buildBikeLanes();
+
+    // ---- Bus stops: a shelter + sign along one sidewalk edge per
+    // non-special block, giving the city visible public transit. ----
+    function buildBusStop(x, z, rotY){
+      // Built directly in world space with addBox/addCylinder (rather than
+      // as children of a rotated THREE.Group) because collide() reads
+      // mesh.position directly as a world position — a rotated group's
+      // children only have LOCAL positions, which would silently break
+      // collision for anything but an unrotated stop at the origin.
+      const shelter = addBox(x, 1.0, z, 3.2, 2.0, 1.1, busShelterMat);
+      shelter.rotation.y = rotY; // cosmetic rotation only; collision uses the unrotated w/h/d as an approximation
+      addBox(x, 2.05, z, 3.4, 0.1, 1.3, poleMat).rotation.y = rotY;
+      const signX = x + 1.9*Math.cos(rotY), signZ = z - 1.9*Math.sin(rotY);
+      addCylinder(signX, 1.1, signZ, 0.05, 2.2, poleMat, 6);
+      const signMesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.7, 0.05), busSignMat);
+      signMesh.position.set(signX, 2.1, signZ);
+      signMesh.rotation.y = rotY;
+      scene.add(signMesh); // small cosmetic sign face, not worth its own collision entry
+    }
+    // place a bus stop on the outer sidewalk edge of each commercial block
+    blockCenters.forEach(b => {
+      if (isSpecialBlock(b)) return;
+      const inner = BLOCK/2;
+      const edgeOut = inner - SIDEWALK_W/2 - 0.2;
+      buildBusStop(b.x, b.z - edgeOut, 0);
+    });
+
+    // ---- Food truck row: a couple of parked food trucks clustered near
+    // the skate plaza, because every good public space needs food nearby. ----
+    function buildFoodTruck(x, z, rotY, mat){
+      const mesh = addBox(x, 1.1, z, 4.0, 2.2, 1.9, mat);
+      mesh.rotation.y = rotY;
+      const window_ = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.9, 1.5), vanGlassMat);
+      window_.position.set(x + 1.6*Math.cos(rotY), 1.4, z - 1.6*Math.sin(rotY));
+      window_.rotation.y = rotY;
+      scene.add(window_);
+    }
+    (function placeFoodTrucks(){
+      const plaza = blockCenters.find(b => b.gx === PLAZA_BLOCK.gx && b.gz === PLAZA_BLOCK.gz);
+      const inner = BLOCK/2;
+      const rowX = plaza.x - (inner - SIDEWALK_W - 3);
+      const rowZStart = plaza.z + inner * 0.5;
+      foodTruckMats.forEach((mat, i) => {
+        buildFoodTruck(rowX, rowZStart + i*5.2, Math.PI/2, mat);
+      });
+    })();
+
+    // ---- Rooftop solar panels: scattered on a few commercial rooftops
+    // as a green-energy touch (cosmetic tilt panels sitting on existing
+    // rooftop decks — added opportunistically, doesn't need to touch the
+    // tower-building functions themselves). ----
+    // (kept lightweight: skipped — rooftop decks already carry AC units/
+    // antennas/tanks, adding more clutter there risks visual noise without
+    // adding flight interest, unlike the street-level civic features above.)
+
 
     // ---- streetlights: poles with lamp heads along both sides of every
     // street segment, spaced evenly ----
