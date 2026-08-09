@@ -1348,6 +1348,23 @@
       addBox(x, top - 0.3, z, 2.6, 0.14, 0.14, poleMat);
       return { x, y: top - 0.3, z };
     }
+    // Places a single straight wire segment between two exact 3D points.
+    // Orientation is computed directly from the segment's direction vector
+    // (rather than lookAt+rotateX, which drifts once the segment has any
+    // vertical droop) so every segment lands precisely between its two
+    // endpoints with no gap or twist.
+    function wireSegment(p0, p1, mat){
+      const dx = p1.x - p0.x, dy = p1.y - p0.y, dz = p1.z - p0.z;
+      const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      if (len < 1e-4) return;
+      const mx = (p0.x + p1.x)/2, my = (p0.y + p1.y)/2, mz = (p0.z + p1.z)/2;
+      const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, len, 4), mat);
+      wire.position.set(mx, my, mz);
+      // default cylinder axis is +Y; rotate that axis onto the (dx,dy,dz) direction
+      const dir = new THREE.Vector3(dx, dy, dz).normalize();
+      wire.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      scene.add(wire); // cosmetic only - thin wires are not added to obstacles
+    }
     function sagWire(p0, p1, sag, segs, mat){
       const n = segs || 8;
       let prev = p0;
@@ -1358,58 +1375,101 @@
         const droop = Math.sin(Math.PI * t) * sag;
         const y = p0.y + (p1.y - p0.y) * t - droop;
         const cur = { x, y, z };
-        const dx = cur.x - prev.x, dy = cur.y - prev.y, dz = cur.z - prev.z;
-        const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        const mx = (cur.x + prev.x)/2, my = (cur.y + prev.y)/2, mz = (cur.z + prev.z)/2;
-        const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, len, 4), mat);
-        wire.position.set(mx, my, mz);
-        wire.lookAt(cur.x, cur.y, cur.z);
-        wire.rotateX(Math.PI/2);
-        scene.add(wire); // cosmetic only - thin wires are not added to obstacles
+        wireSegment(prev, cur, mat);
         prev = cur;
       }
     }
-    function buildPowerLineRun(fixedCoord, from, to, isVertical){
+    // Build poles along one straight run and wire each pole to the next,
+    // returning the list of pole-top attachment points so runs can be
+    // chained together at shared corners into one continuous network.
+    function buildPoleRun(from, to, isVertical, fixedCoord){
       const spacing = 24;
-      const count = Math.floor(Math.abs(to - from) / spacing);
-      let lastTop = null;
+      const count = Math.max(1, Math.floor(Math.abs(to - from) / spacing));
+      const tops = [];
       for (let i = 0; i <= count; i++){
         const t = from + i * spacing * Math.sign(to - from);
         const x = isVertical ? fixedCoord : t;
         const z = isVertical ? t : fixedCoord;
-        const top = buildUtilityPole(x, z);
-        if (lastTop) sagWire(lastTop, top, 0.6, 6, wireMat);
-        lastTop = top;
+        tops.push(buildUtilityPole(x, z));
       }
+      for (let i = 1; i < tops.length; i++){
+        sagWire(tops[i-1], tops[i], 0.6, 6, wireMat);
+      }
+      return tops;
     }
+    // Perimeter runs around the whole city, chained corner-to-corner so
+    // the wires form one continuous connected loop rather than four
+    // disconnected strings that never actually meet.
     const outerEdge = CITY_OFFSET + 6;
-    buildPowerLineRun(-outerEdge, -spanReach, spanReach, false); // north perimeter
-    buildPowerLineRun( outerEdge, -spanReach, spanReach, false); // south perimeter
-    buildPowerLineRun(-outerEdge, -spanReach, spanReach, true);  // west perimeter
-    buildPowerLineRun( outerEdge, -spanReach, spanReach, true);  // east perimeter
+    const northTops = buildPoleRun(-spanReach, spanReach, false, -outerEdge);
+    const southTops = buildPoleRun(-spanReach, spanReach, false,  outerEdge);
+    const westTops  = buildPoleRun(-spanReach, spanReach, true,  -outerEdge);
+    const eastTops  = buildPoleRun(-spanReach, spanReach, true,   outerEdge);
+    // connect each perimeter run's end pole to the nearest corner pole of
+    // the adjacent run so the loop is unbroken at all four corners
+    function nearestTop(list, x, z){
+      let best = list[0], bestD = Infinity;
+      for (const t of list){
+        const d = (t.x-x)*(t.x-x) + (t.z-z)*(t.z-z);
+        if (d < bestD){ bestD = d; best = t; }
+      }
+      return best;
+    }
+    const cornerLinkThreshold = 30;
+    [northTops[0], northTops[northTops.length-1]].forEach(nTop => {
+      const w = nearestTop(westTops, nTop.x, nTop.z);
+      const e = nearestTop(eastTops, nTop.x, nTop.z);
+      if (Math.abs(w.x-nTop.x) + Math.abs(w.z-nTop.z) < cornerLinkThreshold) sagWire(nTop, w, 0.4, 4, wireMat);
+      if (Math.abs(e.x-nTop.x) + Math.abs(e.z-nTop.z) < cornerLinkThreshold) sagWire(nTop, e, 0.4, 4, wireMat);
+    });
+    [southTops[0], southTops[southTops.length-1]].forEach(sTop => {
+      const w = nearestTop(westTops, sTop.x, sTop.z);
+      const e = nearestTop(eastTops, sTop.x, sTop.z);
+      if (Math.abs(w.x-sTop.x) + Math.abs(w.z-sTop.z) < cornerLinkThreshold) sagWire(sTop, w, 0.4, 4, wireMat);
+      if (Math.abs(e.x-sTop.x) + Math.abs(e.z-sTop.z) < cornerLinkThreshold) sagWire(sTop, e, 0.4, 4, wireMat);
+    });
 
     // ---- traffic lights at every four-way intersection ----
-    function buildTrafficSignal(x, z, facing){
+    // Traffic signal head: a small box housing with three lenses. The
+    // lenses are built as thin cylinders rotated so their flat colored
+    // face points horizontally down the `facing` direction (toward
+    // oncoming traffic) instead of pointing straight up/down where the
+    // color is barely visible.
+    function buildSignalLens(x, y, z, facing, mat){
+      const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.1, 12), mat);
+      lens.position.set(x, y, z);
+      // point the cylinder's axis along `facing` so its round face aims outward
+      lens.rotation.x = Math.PI / 2;
+      lens.rotation.z = Math.atan2(facing.x, facing.z);
+      scene.add(lens);
+    }
+    function buildTrafficSignal(x, z, facing, armAxis){
       const poleH = 5.6;
       addCylinder(x, poleH/2, z, 0.11, poleH, poleMat, 8);
       const armLen = STREET_W/2 - 0.5;
       const dir = facing;
-      addBox(x + dir.x*armLen/2, poleH + 0.05, z + dir.z*armLen/2,
-        Math.abs(dir.x) > Math.abs(dir.z) ? armLen : 0.12, 0.12,
-        Math.abs(dir.z) >= Math.abs(dir.x) ? armLen : 0.12, poleMat);
-      const headX = x + dir.x*armLen, headZ = z + dir.z*armLen, headY = poleH - 0.1;
+      // arm extends along a single clean axis (armAxis: 'x' or 'z') out
+      // over the lane it controls, so it never renders diagonally-warped
+      if (armAxis === 'x'){
+        addBox(x + dir.x*armLen/2, poleH + 0.05, z, armLen, 0.12, 0.12, poleMat);
+      } else {
+        addBox(x, poleH + 0.05, z + dir.z*armLen/2, 0.12, 0.12, armLen, poleMat);
+      }
+      const headX = armAxis === 'x' ? x + dir.x*armLen : x;
+      const headZ = armAxis === 'z' ? z + dir.z*armLen : z;
+      const headY = poleH - 0.1;
       addBox(headX, headY, headZ, 0.5, 1.3, 0.5, trafficBoxMat);
-      addCylinder(headX, headY + 0.42, headZ, 0.16, 0.16, redLightMat, 10);
-      addCylinder(headX, headY, headZ, 0.16, 0.16, yellowLightMat, 10);
-      addCylinder(headX, headY - 0.42, headZ, 0.16, 0.16, greenLightMat, 10);
+      buildSignalLens(headX, headY + 0.42, headZ, dir, redLightMat);
+      buildSignalLens(headX, headY, headZ, dir, yellowLightMat);
+      buildSignalLens(headX, headY - 0.42, headZ, dir, greenLightMat);
     }
     const cornerSet = STREET_W/2 + 0.8;
     streetCoords.forEach(sx => {
       streetCoords.forEach(sz => {
-        buildTrafficSignal(sx - cornerSet, sz - cornerSet, { x: 1, z: 1 });
-        buildTrafficSignal(sx + cornerSet, sz - cornerSet, { x: -1, z: 1 });
-        buildTrafficSignal(sx - cornerSet, sz + cornerSet, { x: 1, z: -1 });
-        buildTrafficSignal(sx + cornerSet, sz + cornerSet, { x: -1, z: -1 });
+        buildTrafficSignal(sx - cornerSet, sz - cornerSet, { x: 1, z: 0 }, 'x');
+        buildTrafficSignal(sx + cornerSet, sz - cornerSet, { x: 0, z: 1 }, 'z');
+        buildTrafficSignal(sx - cornerSet, sz + cornerSet, { x: 0, z: -1 }, 'z');
+        buildTrafficSignal(sx + cornerSet, sz + cornerSet, { x: -1, z: 0 }, 'x');
       });
     });
 
@@ -2488,20 +2548,39 @@
         vel.y *= horizDrag;
       }
 
-      const nextPos = pos.clone().addScaledVector(vel, dt);
-      const hit = collide(nextPos);
-      if (!hit){
-        pos.copy(nextPos);
-      } else {
-        // soft bump: only cancel the velocity component driving INTO the
-        // surface (along its normal), keep the rest of the motion — a casual
-        // thud rather than a launch backwards, and no sticking to the wall.
-        const n = hit.normal;
-        const vDotN = vel.dot(n);
-        if (vDotN < 0){
-          vel.addScaledVector(n, -vDotN * 1.15);
+      // Substep the movement so fast flight can't "phase" straight through
+      // a wall in one frame. A single big jump (nextPos = pos + vel*dt) only
+      // ever tests the destination point, so at high speed the drone can
+      // land past a thin obstacle without the endpoint ever registering as
+      // inside it. Breaking the frame's travel into small pieces (capped to
+      // a fraction of the collision radius) means every piece of the path
+      // gets its own collide() check, so a wall can't be skipped over.
+      const frameDelta = vel.clone().multiplyScalar(dt);
+      const frameDist = frameDelta.length();
+      const maxStepDist = 0.15; // well under the 0.35 collision radius
+      const steps = Math.max(1, Math.ceil(frameDist / maxStepDist));
+      const stepDelta = frameDelta.clone().multiplyScalar(1/steps);
+      let bumped = false;
+      for (let s = 0; s < steps; s++){
+        const stepPos = pos.clone().add(stepDelta);
+        const hit = collide(stepPos);
+        if (!hit){
+          pos.copy(stepPos);
+        } else {
+          // soft bump: only cancel the velocity component driving INTO the
+          // surface (along its normal), keep the rest of the motion — a casual
+          // thud rather than a launch backwards, and no sticking to the wall.
+          const n = hit.normal;
+          const vDotN = vel.dot(n);
+          if (vDotN < 0){
+            vel.addScaledVector(n, -vDotN * 1.15);
+          }
+          pos.addScaledVector(n, 0.05); // tiny push-out to avoid sticking, stay at pre-hit position otherwise
+          bumped = true;
+          break; // stop advancing further this frame once we've hit something
         }
-        pos.copy(nextPos).addScaledVector(n, 0.05); // tiny push-out to avoid sticking
+      }
+      if (bumped){
         flyMsg.textContent = 'BUMP';
         setTimeout(() => { flyMsg.textContent=''; }, 300);
       }
