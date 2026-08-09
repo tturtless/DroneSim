@@ -2095,12 +2095,25 @@
           return { normal };
         }
       } else if (o.type === 'cylinder'){
-        const dx = nextPos.x - o.mesh.position.x;
-        const dz = nextPos.z - o.mesh.position.z;
-        const dy = nextPos.y - o.mesh.position.y;
-        const dist = Math.sqrt(dx*dx + dz*dz);
-        if (dist < o.r + r && Math.abs(dy) < o.h/2 + r){
-          const n = dist > 1e-5 ? new THREE.Vector3(dx/dist, 0, dz/dist) : new THREE.Vector3(1,0,0);
+        // Cylinders here aren't always upright: hoop struts are built with
+        // orientAlong() and can point in any direction (diagonal hexagon/
+        // pentagon edges, angled wall mounts, etc). Treat the cylinder as a
+        // capsule around its real 3D axis (mesh's local +Y, rotated by its
+        // quaternion) instead of assuming the axis is world Y — the old
+        // dist-in-XZ/height-in-Y test built a tall vertical "phantom slab"
+        // around tilted struts, so you could clip on empty air near a
+        // diagonal strut, especially around a hoop's open center.
+        const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(o.mesh.quaternion);
+        const center = o.mesh.position;
+        const toPoint = new THREE.Vector3().subVectors(nextPos, center);
+        const halfLen = o.h / 2;
+        // project onto the axis, clamped to the segment's extent
+        const along = THREE.MathUtils.clamp(toPoint.dot(axis), -halfLen, halfLen);
+        const closest = new THREE.Vector3().copy(axis).multiplyScalar(along).add(center);
+        const offset = new THREE.Vector3().subVectors(nextPos, closest);
+        const dist = offset.length();
+        if (dist < o.r + r){
+          const n = dist > 1e-5 ? offset.divideScalar(dist) : new THREE.Vector3(1,0,0);
           return { normal: n };
         }
       }
