@@ -967,27 +967,48 @@
       });
     }
     streetCoords.forEach(c => { buildSolidEdgeLines(c, true); buildSolidEdgeLines(c, false); });
-    // crosswalk zebra stripes + stop lines at every intersection
-    function buildCrosswalk(cx, cz, isVertical){
-      const stripeW = 1.1, stripeGap = 0.9, count = 8, stripeLen = STREET_W - SIDEWALK_W*0.4;
+    // Crosswalk zebra stripes at every intersection. A crosswalk for
+    // pedestrians crossing a given street sits at a FIXED offset just past
+    // the intersection along that street's axis, and its stripes span
+    // ACROSS the street's width (centered on the street), each stripe
+    // short along the direction of travel. (Earlier version had these
+    // swapped, which stretched stripes lengthwise into the intersection
+    // instead of laying them across it — this is the fix.)
+    function buildCrosswalk(streetCenterX, streetCenterZ, fixedCoord, isVertical){
+      const stripeShort = 1.6;     // stripe length along the direction of travel
+      const stripeGap = 1.1;
+      const spanW = STREET_W - SIDEWALK_W * 0.6; // how far the crosswalk spans across the street
+      const count = Math.max(1, Math.round(spanW / (stripeShort + stripeGap)));
+      const start = -(count * (stripeShort + stripeGap)) / 2;
       for (let i = 0; i < count; i++){
-        const off = -(count*(stripeW+stripeGap))/2 + i*(stripeW+stripeGap) + stripeW/2;
-        if (isVertical) addBox(cx + off, 0.14, cz, stripeW, 0.02, stripeLen, crosswalkMat);
-        else addBox(cx, 0.14, cz + off, stripeLen, 0.02, stripeW, crosswalkMat);
+        const off = start + i * (stripeShort + stripeGap) + stripeShort / 2;
+        if (isVertical){
+          // crossing a north-south street: stripes spaced across X (the
+          // street's width), each short along Z, all at the fixed Z offset
+          addBox(streetCenterX + off, 0.14, fixedCoord, stripeShort, 0.02, 1.2, crosswalkMat);
+        } else {
+          // crossing an east-west street: stripes spaced across Z, each
+          // short along X, all at the fixed X offset
+          addBox(fixedCoord, 0.14, streetCenterZ + off, 1.2, 0.02, stripeShort, crosswalkMat);
+        }
       }
     }
     const half = STREET_W/2;
     streetCoords.forEach(sx => {
       streetCoords.forEach(sz => {
-        buildCrosswalk(sx, sz - half - 1.2, true);
-        buildCrosswalk(sx, sz + half + 1.2, true);
-        buildCrosswalk(sx - half - 1.2, sz, false);
-        buildCrosswalk(sx + half + 1.2, sz, false);
+        // crosswalks for crossing the vertical (N-S) street, placed just
+        // north and south of the intersection
+        buildCrosswalk(sx, sz, sz - half - 1.4, true);
+        buildCrosswalk(sx, sz, sz + half + 1.4, true);
+        // crosswalks for crossing the horizontal (E-W) street, placed just
+        // west and east of the intersection
+        buildCrosswalk(sx, sz, sx - half - 1.4, false);
+        buildCrosswalk(sx, sz, sx + half + 1.4, false);
         // stop lines just before the intersection on all four approaches
-        addBox(sx, 0.14, sz - half - 3.2, STREET_W - 1, 0.02, 0.5, crosswalkMat);
-        addBox(sx, 0.14, sz + half + 3.2, STREET_W - 1, 0.02, 0.5, crosswalkMat);
-        addBox(sx - half - 3.2, 0.14, sz, 0.5, 0.02, STREET_W - 1, crosswalkMat);
-        addBox(sx + half + 3.2, 0.14, sz, 0.5, 0.02, STREET_W - 1, crosswalkMat);
+        addBox(sx, 0.14, sz - half - 3.6, STREET_W - 1, 0.02, 0.5, crosswalkMat);
+        addBox(sx, 0.14, sz + half + 3.6, STREET_W - 1, 0.02, 0.5, crosswalkMat);
+        addBox(sx - half - 3.6, 0.14, sz, 0.5, 0.02, STREET_W - 1, crosswalkMat);
+        addBox(sx + half + 3.6, 0.14, sz, 0.5, 0.02, STREET_W - 1, crosswalkMat);
       });
     });
 
@@ -2489,9 +2510,9 @@
     // acro mode: sticks command a rotation RATE (deg/s equivalent), not a
     // clamped attitude angle, so full flips/rolls/loops are possible and the
     // craft holds whatever attitude you leave it at when sticks are centered.
-    const YAW_RATE = 3.4;   // rad/s at full deflection
-    const PITCH_RATE = 4.4; // rad/s at full deflection
-    const ROLL_RATE = 4.7;  // rad/s at full deflection
+    const YAW_RATE = 2.7;   // rad/s at full deflection
+    const PITCH_RATE = 3.5; // rad/s at full deflection
+    const ROLL_RATE = 3.8;  // rad/s at full deflection
 
     // Motor KV comes from whichever craft was selected at launch. KV chiefly
     // drives motor RPM/thrust headroom, so it scales max acceleration
@@ -2525,7 +2546,7 @@
       // thrust acts along the drone's body "up" axis (like a real multirotor),
       // found by rotating world-up through the current attitude quaternion —
       // this stays correct at any orientation, including upside down.
-      const thrust = t * 34 * KV_SCALE; // max accel — reduced for a heavier, less twitchy feel
+      const thrust = t * 26 * KV_SCALE; // max accel — reduced further for a heavier feel
       const bodyUp = new THREE.Vector3(0, 1, 0).applyQuaternion(orientation);
 
       vel.x += bodyUp.x * thrust * dt;
@@ -2536,7 +2557,7 @@
       // feel weighty and controlled rather than floaty; horizontal/climb drag
       // is higher than before so the craft settles and holds a speed rather
       // than coasting/skating, reinforcing a heavier feel.
-      const horizDrag = 1 - Math.min(1, 1.1*dt);
+      const horizDrag = 1 - Math.min(1, 1.5*dt);
       vel.x *= horizDrag;
       vel.z *= horizDrag;
       if (vel.y < 0){
