@@ -1339,6 +1339,14 @@
       const count = Math.floor(Math.abs(to - from) / spacing);
       for (let i = 0; i <= count; i++){
         const t = from + i * spacing * Math.sign(to - from);
+        // skip any position that falls inside a CROSS street's pavement —
+        // otherwise a pole ends up planted in the middle of the road
+        // wherever this line of lights passes a perpendicular street.
+        let insideCrossStreet = false;
+        for (const sc of streetCoords){
+          if (Math.abs(t - sc) < STREET_W/2 + 1) { insideCrossStreet = true; break; }
+        }
+        if (insideCrossStreet) continue;
         if (axisIsVertical){
           buildStreetlight(coordFixed, t, { x: inwardSign, z: 0 });
         } else {
@@ -2510,9 +2518,9 @@
     // acro mode: sticks command a rotation RATE (deg/s equivalent), not a
     // clamped attitude angle, so full flips/rolls/loops are possible and the
     // craft holds whatever attitude you leave it at when sticks are centered.
-    const YAW_RATE = 2.7;   // rad/s at full deflection
-    const PITCH_RATE = 3.5; // rad/s at full deflection
-    const ROLL_RATE = 3.8;  // rad/s at full deflection
+    const YAW_RATE = 3.05;   // rad/s at full deflection
+    const PITCH_RATE = 3.95; // rad/s at full deflection
+    const ROLL_RATE = 4.25;  // rad/s at full deflection
 
     // Motor KV comes from whichever craft was selected at launch. KV chiefly
     // drives motor RPM/thrust headroom, so it scales max acceleration
@@ -2546,7 +2554,7 @@
       // thrust acts along the drone's body "up" axis (like a real multirotor),
       // found by rotating world-up through the current attitude quaternion —
       // this stays correct at any orientation, including upside down.
-      const thrust = t * 26 * KV_SCALE; // max accel — reduced further for a heavier feel
+      const thrust = t * 30 * KV_SCALE; // max accel — split the difference back toward the lighter feel
       const bodyUp = new THREE.Vector3(0, 1, 0).applyQuaternion(orientation);
 
       vel.x += bodyUp.x * thrust * dt;
@@ -2557,7 +2565,7 @@
       // feel weighty and controlled rather than floaty; horizontal/climb drag
       // is higher than before so the craft settles and holds a speed rather
       // than coasting/skating, reinforcing a heavier feel.
-      const horizDrag = 1 - Math.min(1, 1.5*dt);
+      const horizDrag = 1 - Math.min(1, 1.3*dt);
       vel.x *= horizDrag;
       vel.z *= horizDrag;
       if (vel.y < 0){
