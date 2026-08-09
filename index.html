@@ -1477,41 +1477,53 @@
       if (b.gx === PARK_BLOCK.gx && b.gz === PARK_BLOCK.gz) buildPark(b.x, b.z);
     });
 
-    // ---- FPV drone hoops: checkerboard-poled hexagon/square/rectangle
-    // hoops in the black-and-white kit shown in the reference photo.
-    // These are airborne targets, not street furniture: they float mid-air
-    // between buildings, hang off building faces, and sit up on rooftops —
-    // never planted on the ground/street like the old gate course was.
-    // Every strut is a real collidable obstacle via addBox/addCylinder. ----
+    // ---- FPV drone hoops: checkerboard-striped round-tube hexagon/
+    // rectangle/pentagon hoops in the black-and-white kit shown in the
+    // reference photo. These are airborne targets, not street furniture:
+    // they float mid-air between buildings, hang off building faces, and
+    // sit up on rooftops — never planted on the ground/street.
+    // Collision comes ONLY from the individual tube segments themselves
+    // (no bounding blob around the open center), so the hoop's middle is
+    // always clear to fly through. ----
     const hoopWhiteMat = new THREE.MeshStandardMaterial({ color: 0xf0f0ea, roughness: 0.4, metalness: 0.1 });
     const hoopBlackMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.45, metalness: 0.15 });
     function checkerMat(i){ return (i % 2 === 0) ? hoopWhiteMat : hoopBlackMat; }
 
-    // a single straight strut made of alternating black/white segments
-    // (the checkerboard-pole look from the reference kit), from p0 to p1
+    // orient a mesh (built standing along +Y by default, e.g. addCylinder)
+    // so its Y axis points along unit direction (ux,uy,uz)
+    function orientAlong(mesh, ux, uy, uz){
+      const dir = new THREE.Vector3(ux, uy, uz).normalize();
+      const yAxis = new THREE.Vector3(0, 1, 0);
+      const quat = new THREE.Quaternion().setFromUnitVectors(yAxis, dir);
+      mesh.quaternion.copy(quat);
+    }
+
+    // a single straight strut made of alternating black/white round-tube
+    // segments (the striped-pole look from the reference kit), from p0 to p1
     function checkerStrut(p0, p1, thick, segStart){
       const len = Math.hypot(p1.x-p0.x, p1.y-p0.y, p1.z-p0.z);
-      const segLen = 0.42;
+      const segLen = 0.4;
       const segs = Math.max(1, Math.round(len / segLen));
-      const ux = (p1.x-p0.x)/len, uy = (p1.y-p0.y)/len, uz = (p1.z-p0.z)/len;
-      const yaw = Math.atan2(ux, uz);
-      const pitch = Math.asin(uy);
       for (let i = 0; i < segs; i++){
         const t0 = i/segs, t1 = (i+1)/segs;
         const mt = (t0+t1)/2;
         const mx = p0.x + (p1.x-p0.x)*mt, my = p0.y + (p1.y-p0.y)*mt, mz = p0.z + (p1.z-p0.z)*mt;
-        const segMesh = addBox(mx, my, mz, thick, thick, len/segs + 0.02, checkerMat(i + (segStart||0)));
-        segMesh.rotation.y = yaw;
-        segMesh.rotation.x = -pitch;
+        const segMesh = addCylinder(mx, my, mz, thick, len/segs + 0.03, checkerMat(i + (segStart||0)), 8);
+        orientAlong(segMesh, p1.x-p0.x, p1.y-p0.y, p1.z-p0.z);
+        // shrink the collision footprint of each tube segment slightly
+        // below its visual radius so the open hoop center stays clear
+        // and neighboring segments don't overlap-block each other
+        const lastObstacle = obstacles[obstacles.length - 1];
+        if (lastObstacle) lastObstacle.r = thick * 0.9;
       }
     }
 
-    // hexagon hoop: six checkerboard struts forming a ring, oriented by
-    // a normal vector (nx,ny,nz) so it can face any direction — flat
+    // hexagon hoop: six checkerboard tube struts forming a ring, oriented
+    // by a normal vector (nx,ny,nz) so it can face any direction — flat
     // overhead, facing down a street, or angled off a wall.
     function hexHoop(x, y, z, radius, nx, ny, nz, rollDeg){
       radius = radius || 2.0;
-      const thick = 0.14;
+      const thick = 0.1;
       const roll = (rollDeg||0) * Math.PI/180;
       // build an orthonormal basis (u,v) perpendicular to the normal
       const n = new THREE.Vector3(nx,ny,nz).normalize();
@@ -1531,14 +1543,12 @@
       }
       for (let i = 0; i < 6; i++){
         checkerStrut(pts[i], pts[(i+1)%6], thick, i);
-        addCylinder(pts[i].x, pts[i].y, pts[i].z, 0.09, 0.28, checkerMat(i), 8);
       }
-      obstacles.push({ mesh: { position: new THREE.Vector3(x,y,z) }, type: 'cylinder', r: radius*0.85, h: radius*1.7 });
     }
 
     // square/rectangle hoop, same orientable-normal approach
     function rectHoop(x, y, z, w, h, nx, ny, nz, rollDeg){
-      const thick = 0.14;
+      const thick = 0.1;
       const roll = (rollDeg||0) * Math.PI/180;
       const n = new THREE.Vector3(nx,ny,nz).normalize();
       const up = Math.abs(n.y) > 0.95 ? new THREE.Vector3(1,0,0) : new THREE.Vector3(0,1,0);
@@ -1554,15 +1564,13 @@
       ];
       for (let i = 0; i < 4; i++){
         checkerStrut(corners[i], corners[(i+1)%4], thick, i);
-        addCylinder(corners[i].x, corners[i].y, corners[i].z, 0.09, 0.28, checkerMat(i), 8);
       }
-      obstacles.push({ mesh: { position: new THREE.Vector3(x,y,z) }, type: 'box', w: w*0.9, h: h*0.9, d: 0.6 });
     }
 
     // pentagon hoop variant, matching the pentagon shape seen in the kit
     function pentaHoop(x, y, z, radius, nx, ny, nz, rollDeg){
       radius = radius || 1.8;
-      const thick = 0.14;
+      const thick = 0.1;
       const roll = (rollDeg||0) * Math.PI/180;
       const n = new THREE.Vector3(nx,ny,nz).normalize();
       const up = Math.abs(n.y) > 0.95 ? new THREE.Vector3(1,0,0) : new THREE.Vector3(0,1,0);
@@ -1577,9 +1585,7 @@
       }
       for (let i = 0; i < 5; i++){
         checkerStrut(pts[i], pts[(i+1)%5], thick, i);
-        addCylinder(pts[i].x, pts[i].y, pts[i].z, 0.09, 0.28, checkerMat(i), 8);
       }
-      obstacles.push({ mesh: { position: new THREE.Vector3(x,y,z) }, type: 'cylinder', r: radius*0.85, h: radius*1.7 });
     }
 
     // a short mounting arm bolting a hoop to a wall or roof edge, so
@@ -1589,15 +1595,7 @@
       const n = new THREE.Vector3(nx,ny,nz).normalize();
       const ex = x + n.x*len/2, ey = y + n.y*len/2, ez = z + n.z*len/2;
       const arm = addCylinder(ex, ey, ez, 0.07, len, hoopBlackMat, 8);
-      const yaw = Math.atan2(n.x, n.z);
-      const pitch = Math.asin(n.y);
-      arm.rotation.z = pitch;
-      arm.rotation.y = yaw;
-      // (fine-tune: cylinders default to standing on Y, so also apply a
-      // perpendicular tilt so the arm actually points along n)
-      arm.rotation.x = Math.PI/2 - pitch;
-      arm.rotation.y = yaw;
-      arm.rotation.z = 0;
+      orientAlong(arm, n.x, n.y, n.z);
     }
 
     function buildDroneCourse(){
