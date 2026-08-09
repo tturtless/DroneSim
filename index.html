@@ -993,17 +993,22 @@
 
     // ---- sidewalks + curbs framing every block ----
     function buildSidewalkRing(bx, bz){
-      const outer = BLOCK/2 + SIDEWALK_W;
-      const inner = BLOCK/2;
+      // Sidewalk band sits INSIDE the block edge (between the buildable
+      // interior and the street), so there's real paved street outside
+      // the curb instead of the sidewalk overlapping the roadway.
+      const inner = BLOCK/2;                // block edge = curb line = street edge
+      const walkInner = inner - SIDEWALK_W; // inner edge of the sidewalk band
+      const mid = (inner + walkInner) / 2;
       const curbH = 0.15, sidewalkH = 0.1;
-      addBox(bx, sidewalkH/2, bz - (inner+outer)/2, outer*2, sidewalkH, SIDEWALK_W, sidewalkMat); // north
-      addBox(bx, sidewalkH/2, bz + (inner+outer)/2, outer*2, sidewalkH, SIDEWALK_W, sidewalkMat); // south
-      addBox(bx - (inner+outer)/2, sidewalkH/2, bz, SIDEWALK_W, sidewalkH, outer*2, sidewalkMat); // west
-      addBox(bx + (inner+outer)/2, sidewalkH/2, bz, SIDEWALK_W, sidewalkH, outer*2, sidewalkMat); // east
-      addBox(bx, curbH/2, bz - inner - 0.15, inner*2 + SIDEWALK_W*2, curbH, 0.3, curbMat);
-      addBox(bx, curbH/2, bz + inner + 0.15, inner*2 + SIDEWALK_W*2, curbH, 0.3, curbMat);
-      addBox(bx - inner - 0.15, curbH/2, bz, 0.3, curbH, inner*2 + SIDEWALK_W*2, curbMat);
-      addBox(bx + inner + 0.15, curbH/2, bz, 0.3, curbH, inner*2 + SIDEWALK_W*2, curbMat);
+      addBox(bx, sidewalkH/2, bz - mid, inner*2, sidewalkH, SIDEWALK_W, sidewalkMat); // north
+      addBox(bx, sidewalkH/2, bz + mid, inner*2, sidewalkH, SIDEWALK_W, sidewalkMat); // south
+      addBox(bx - mid, sidewalkH/2, bz, SIDEWALK_W, sidewalkH, inner*2, sidewalkMat); // west
+      addBox(bx + mid, sidewalkH/2, bz, SIDEWALK_W, sidewalkH, inner*2, sidewalkMat); // east
+      // curb strip right at the street edge (outer edge of the sidewalk)
+      addBox(bx, curbH/2, bz - inner + 0.05, inner*2, curbH, 0.3, curbMat);
+      addBox(bx, curbH/2, bz + inner - 0.05, inner*2, curbH, 0.3, curbMat);
+      addBox(bx - inner + 0.05, curbH/2, bz, 0.3, curbH, inner*2, curbMat);
+      addBox(bx + inner - 0.05, curbH/2, bz, 0.3, curbH, inner*2, curbMat);
     }
     blockCenters.forEach(b => buildSidewalkRing(b.x, b.z));
 
@@ -1238,7 +1243,7 @@
     // and block interior stay clear for flying.
     function furnishBlockSidewalks(bx, bz, styleSeed){
       const inner = BLOCK/2;
-      const walkMid = inner + SIDEWALK_W/2; // sidewalk centerline offset from block center
+      const walkMid = inner - SIDEWALK_W/2; // sidewalk centerline, inset from the block edge (street starts at `inner`)
       const edgeSpots = [
         { axis: 'top',    x: bx, z: bz - walkMid },
         { axis: 'bottom', x: bx, z: bz + walkMid },
@@ -1264,13 +1269,14 @@
         }
       });
       // one dumpster + maybe a parked van tucked near a back corner of the
-      // block (simulating a service alley), off the main sidewalk flow
+      // block (simulating a service alley), still sitting on the sidewalk
+      // band rather than out in the roadway.
       const corner = cityPick([[-1,-1],[1,-1],[-1,1],[1,1]]);
-      const dx = bx + corner[0]*(inner + SIDEWALK_W + 1.6);
-      const dz = bz + corner[1]*(inner + SIDEWALK_W + 1.6);
+      const dx = bx + corner[0]*(inner - SIDEWALK_W/2);
+      const dz = bz + corner[1]*(inner - SIDEWALK_W/2);
       buildDumpster(dx, dz, cityRange(0, Math.PI));
       if (cityRand() < 0.5){
-        buildParkedVan(bx + corner[0]*(inner-2), bz + corner[1]*(inner + SIDEWALK_W - 1), corner[1] !== 0 ? Math.PI/2 : 0);
+        buildParkedVan(bx + corner[0]*(inner - SIDEWALK_W - 3), bz + corner[1]*(inner - SIDEWALK_W/2), corner[1] !== 0 ? Math.PI/2 : 0);
       }
     }
 
