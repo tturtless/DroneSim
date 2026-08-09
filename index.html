@@ -2040,13 +2040,19 @@
         const step = Math.min(angleBetween, steerRate * dt);
         heading.applyAxisAngle(axis, step).normalize();
       }
-      rogueGroup.position.addScaledVector(heading, tier.speed * dt);
+      // Accumulate this frame's intended displacement (base travel + weave +
+      // dodge) instead of applying each straight to rogueGroup.position, so
+      // the whole move can be run through the same building-collision check
+      // the player uses. Previously these applied directly with no
+      // obstacle check at all, so rogue drones could fly straight through
+      // towers.
+      const moveDelta = heading.clone().multiplyScalar(tier.speed * dt);
 
       // higher-tier drones weave laterally, making them harder to lead with a net
       if (tier.weave > 0){
         rogueGroup.userData.weavePhase += tier.weaveFreq * dt;
         const lateral = new THREE.Vector3(-heading.z, 0, heading.x); // perpendicular to travel
-        rogueGroup.position.addScaledVector(lateral, Math.sin(rogueGroup.userData.weavePhase) * tier.weave * dt);
+        moveDelta.addScaledVector(lateral, Math.sin(rogueGroup.userData.weavePhase) * tier.weave * dt);
       }
       // top-tier drones actively dodge nets that get close, juking sideways
       if (tier.dodge > 0){
@@ -2054,7 +2060,7 @@
         // Apply any active dodge velocity (bleeds off over ~0.4s so the juke
         // reads as a sharp bank rather than a teleport or a runway sprint)
         if (!rogueGroup.userData.dodgeVel) rogueGroup.userData.dodgeVel = new THREE.Vector3();
-        rogueGroup.position.addScaledVector(rogueGroup.userData.dodgeVel, dt);
+        moveDelta.addScaledVector(rogueGroup.userData.dodgeVel, dt);
         rogueGroup.userData.dodgeVel.multiplyScalar(Math.max(0, 1 - 2.5 * dt));
         for (const np of netProjectiles){
           if (np.mesh.position.distanceTo(rogueGroup.position) < 6 && rogueGroup.userData.dodgeCooldown <= 0){
@@ -2068,6 +2074,35 @@
           }
         }
       }
+
+      // Apply the accumulated move through the same substepped
+      // building-collision check the player craft uses, so a rogue drone
+      // deflects off a tower instead of phasing through it. On a hit it
+      // also immediately re-targets, so it doesn't just grind repeatedly
+      // into the same wall it was heading for.
+      {
+        const moveDist = moveDelta.length();
+        const rogueStepMax = 0.2;
+        const rogueSteps = Math.max(1, Math.ceil(moveDist / rogueStepMax));
+        const rogueStepDelta = moveDelta.clone().multiplyScalar(1 / rogueSteps);
+        for (let rs = 0; rs < rogueSteps; rs++){
+          const stepPos = rogueGroup.position.clone().add(rogueStepDelta);
+          const hit = collide(stepPos);
+          if (!hit){
+            rogueGroup.position.copy(stepPos);
+          } else {
+            const n = hit.normal;
+            // deflect the heading off the surface instead of stopping dead,
+            // so it reads as banking away from the building
+            const hDotN = heading.dot(n);
+            if (hDotN < 0) heading.addScaledVector(n, -hDotN * 1.3).normalize();
+            rogueGroup.position.addScaledVector(n, 0.1); // small push-out, avoid sticking
+            pickRogueTarget(); // stop heading straight back at what it just hit
+            break;
+          }
+        }
+      }
+
       // keep it inside the play volume and above ground even mid-turn,
       // since the eased heading can otherwise carry it slightly wide of a
       // far/high target before it finishes banking around
@@ -2565,7 +2600,7 @@
       // feel weighty and controlled rather than floaty; horizontal/climb drag
       // is higher than before so the craft settles and holds a speed rather
       // than coasting/skating, reinforcing a heavier feel.
-      const horizDrag = 1 - Math.min(1, 1.3*dt);
+      const horizDrag = 1 - Math.min(1, 0.45*dt);
       vel.x *= horizDrag;
       vel.z *= horizDrag;
       if (vel.y < 0){
