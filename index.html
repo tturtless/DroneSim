@@ -2600,7 +2600,7 @@
       // feel weighty and controlled rather than floaty; horizontal/climb drag
       // is higher than before so the craft settles and holds a speed rather
       // than coasting/skating, reinforcing a heavier feel.
-      const horizDrag = 1 - Math.min(1, 0.45*dt);
+      const horizDrag = 1 - Math.min(1, 1.045*dt);
       vel.x *= horizDrag;
       vel.z *= horizDrag;
       if (vel.y < 0){
